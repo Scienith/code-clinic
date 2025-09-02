@@ -1,0 +1,38 @@
+# Package A - depends on A1 and A2 and common
+from example_project.A.A1 import process_data
+from example_project.A.A2 import validate_input, transform_data
+from example_project.common import BaseProcessor, get_base_config
+
+def main_workflow(data):
+    """Main workflow function that orchestrates the process."""
+    if validate_input(data):
+        processed = process_data(data)
+        result = transform_data(processed)
+        return result
+    return None
+
+def analyze_results(results):
+    """Analyze the results from the workflow."""
+    summary = {}
+    for key, value in results.items():
+        summary[key] = len(value) if isinstance(value, list) else value
+    return summary
+
+class DataProcessor(BaseProcessor):
+    """Main data processor class that extends BaseProcessor."""
+    
+    def __init__(self):
+        super().__init__(get_base_config())
+        self.cache = {}
+    
+    def process(self, item):
+        """Process a single item."""
+        if item in self.cache:
+            return self.cache[item]
+        result = item.upper()
+        self.cache[item] = result
+        return result
+    
+    def clear_cache(self):
+        """Clear the processing cache."""
+        self.cache.clear()
