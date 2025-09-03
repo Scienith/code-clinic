@@ -22,5 +22,16 @@ Simple API for analyzing Python projects:
 from .api import analyze_project
 from .stub import stub
 
+try:
+    from importlib.metadata import version, PackageNotFoundError
+except ImportError:
+    # Python < 3.8 compatibility
+    from importlib_metadata import version, PackageNotFoundError
+
+try:
+    __version__ = version("codeclinic")
+except PackageNotFoundError:
+    # Fallback for development/uninstalled package
+    __version__ = "unknown"
+
 __all__ = ["analyze_project", "stub", "__version__"]
-__version__ = "0.1.0"

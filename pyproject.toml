@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling>=1.25.0"]
+requires = ["hatchling>=1.25.0", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
 name = "codeclinic"
-version = "0.1.1"
+dynamic = ["version"]
 description = "X-ray your Python project: import graph + stub maturity metrics + Graphviz viz + CLI"
 readme = "README.md"
 authors = [{ name = "CodeClinic Team", email = "codeclinic@example.com" }]
@@ -74,3 +74,6 @@ format = "svg"
 output = "codeclinic_results"
 # Count private functions (prefixed with _) in metrics?
 count_private = false
+
+[tool.hatch.version]
+source = "vcs"
