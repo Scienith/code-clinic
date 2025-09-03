@@ -1,0 +1,23 @@
+version: "1.0"
+
+# 基础配置
+paths:
+  - "src"
+output: "test_with_config"
+format: "svg"
+count_private: false
+
+# 导入规则配置
+import_rules:
+  # 白名单：这些模块可以被任何地方导入
+  white_list:
+    - codeclinic.types
+    - codeclinic.stub
+    - codeclinic.config
+    - codeclinic.node_types
+    
+  # 规则开关
+  rules:
+    allow_cross_package: false    # 禁止跨包导入
+    allow_upward_import: false    # 禁止子模块导入父模块
+    allow_skip_levels: false      # 禁止跳级导入

@@ -1,0 +1,206 @@
+{
+  "version": "1.0",
+  "timestamp": "2025-09-03T16:50:10.859991",
+  "project_root": "src",
+  "analysis_type": "import_violations",
+  "summary": {
+    "total_nodes": 18,
+    "total_import_edges": 34,
+    "total_violations": 0,
+    "compliance_rate": 1.0,
+    "violations_by_type": {},
+    "violations_by_severity": {}
+  },
+  "rules_applied": {
+    "white_list": [
+      "codeclinic.types",
+      "codeclinic.stub",
+      "codeclinic.config",
+      "codeclinic.node_types"
+    ],
+    "allow_cross_package": false,
+    "allow_upward_import": false,
+    "allow_skip_levels": false
+  },
+  "violations": [],
+  "edge_classification": {
+    "legal_edges": [
+      {
+        "from": "codeclinic",
+        "to": "codeclinic.api",
+        "status": "legal"
+      },
+      {
+        "from": "codeclinic",
+        "to": "codeclinic.stub",
+        "status": "legal"
+      },
+      {
+        "from": "codeclinic.__main__",
+        "to": "codeclinic.cli",
+        "status": "legal"
+      },
+      {
+        "from": "codeclinic.api",
+        "to": "codeclinic.ast_scanner",
+        "status": "legal"
+      },
+      {
+        "from": "codeclinic.api",
+        "to": "codeclinic.graphviz_render",
+        "status": "legal"
+      },
+      {
+        "from": "codeclinic.api",
+        "to": "codeclinic.types",
+        "status": "legal"
+      },
+      {
+        "from": "codeclinic.ast_scanner",
+        "to": "codeclinic.types",
+        "status": "legal"
+      },
+      {
+        "from": "codeclinic.cli",
+        "to": "codeclinic.ast_scanner",
+        "status": "legal"
+      },
+      {
+        "from": "codeclinic.cli",
+        "to": "codeclinic.config",
+        "status": "legal"
+      },
+      {
+        "from": "codeclinic.cli",
+        "to": "codeclinic.config_loader",
+        "status": "legal"
+      },
+      {
+        "from": "codeclinic.cli",
+        "to": "codeclinic.data_collector",
+        "status": "legal"
+      },
+      {
+        "from": "codeclinic.cli",
+        "to": "codeclinic.graphviz_render",
+        "status": "legal"
+      },
+      {
+        "from": "codeclinic.cli",
+        "to": "codeclinic.json_output",
+        "status": "legal"
+      },
+      {
+        "from": "codeclinic.cli",
+        "to": "codeclinic.node_types",
+        "status": "legal"
+      },
+      {
+        "from": "codeclinic.cli",
+        "to": "codeclinic.stub_analysis",
+        "status": "legal"
+      },
+      {
+        "from": "codeclinic.cli",
+        "to": "codeclinic.stub_report",
+        "status": "legal"
+      },
+      {
+        "from": "codeclinic.cli",
+        "to": "codeclinic.types",
+        "status": "legal"
+      },
+      {
+        "from": "codeclinic.cli",
+        "to": "codeclinic.violations_analysis",
+        "status": "legal"
+      },
+      {
+        "from": "codeclinic.config",
+        "to": "codeclinic.config_loader",
+        "status": "legal"
+      },
+      {
+        "from": "codeclinic.config_loader",
+        "to": "codeclinic.config",
+        "status": "legal"
+      },
+      {
+        "from": "codeclinic.data_collector",
+        "to": "codeclinic.node_types",
+        "status": "legal"
+      },
+      {
+        "from": "codeclinic.graph_analysis",
+        "to": "codeclinic.types",
+        "status": "legal"
+      },
+      {
+        "from": "codeclinic.graphviz_render",
+        "to": "codeclinic.node_types",
+        "status": "legal"
+      },
+      {
+        "from": "codeclinic.graphviz_render",
+        "to": "codeclinic.types",
+        "status": "legal"
+      },
+      {
+        "from": "codeclinic.import_rules",
+        "to": "codeclinic.config_loader",
+        "status": "legal"
+      },
+      {
+        "from": "codeclinic.import_rules",
+        "to": "codeclinic.node_types",
+        "status": "legal"
+      },
+      {
+        "from": "codeclinic.json_output",
+        "to": "codeclinic.types",
+        "status": "legal"
+      },
+      {
+        "from": "codeclinic.stub_analysis",
+        "to": "codeclinic.graphviz_render",
+        "status": "legal"
+      },
+      {
+        "from": "codeclinic.stub_analysis",
+        "to": "codeclinic.node_types",
+        "status": "legal"
+      },
+      {
+        "from": "codeclinic.stub_report",
+        "to": "codeclinic.graph_analysis",
+        "status": "legal"
+      },
+      {
+        "from": "codeclinic.stub_report",
+        "to": "codeclinic.types",
+        "status": "legal"
+      },
+      {
+        "from": "codeclinic.violations_analysis",
+        "to": "codeclinic.graphviz_render",
+        "status": "legal"
+      },
+      {
+        "from": "codeclinic.violations_analysis",
+        "to": "codeclinic.import_rules",
+        "status": "legal"
+      },
+      {
+        "from": "codeclinic.violations_analysis",
+        "to": "codeclinic.node_types",
+        "status": "legal"
+      }
+    ],
+    "violation_edges": []
+  },
+  "node_violation_stats": {
+    "violating_importers": {},
+    "violated_targets": {}
+  },
+  "recommendations": []
+}

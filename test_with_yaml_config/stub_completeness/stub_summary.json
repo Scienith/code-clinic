@@ -1,0 +1,315 @@
+{
+  "version": "1.0",
+  "timestamp": "2025-09-03T16:50:10.859991",
+  "project_root": "src",
+  "analysis_type": "stub_completeness",
+  "summary": {
+    "total_nodes": 18,
+    "total_functions": 0,
+    "total_public_functions": 0,
+    "total_stubs": 0,
+    "global_stub_ratio": 0.0,
+    "nodes_with_stubs": 0,
+    "fully_stubbed_nodes": 0,
+    "fully_implemented_nodes": 18
+  },
+  "completion_distribution": {
+    "0%": 18,
+    "1-25%": 0,
+    "26-50%": 0,
+    "51-75%": 0,
+    "76-99%": 0,
+    "100%": 0
+  },
+  "node_statistics": [
+    {
+      "name": "codeclinic",
+      "node_type": "package",
+      "file_path": "/Users/junjiecai/Desktop/scientith_projects/code_clinic/src/codeclinic/__init__.py",
+      "package_depth": 0,
+      "graph_depth": 0,
+      "functions_total": 0,
+      "functions_public": 0,
+      "stubs": 0,
+      "stub_ratio": 0.0,
+      "completion_status": "完全实现",
+      "priority_score": 50.0
+    },
+    {
+      "name": "codeclinic.__main__",
+      "node_type": "module",
+      "file_path": "/Users/junjiecai/Desktop/scientith_projects/code_clinic/src/codeclinic/__main__.py",
+      "package_depth": 1,
+      "graph_depth": 0,
+      "functions_total": 0,
+      "functions_public": 0,
+      "stubs": 0,
+      "stub_ratio": 0.0,
+      "completion_status": "完全实现",
+      "priority_score": 40.0
+    },
+    {
+      "name": "codeclinic.api",
+      "node_type": "module",
+      "file_path": "/Users/junjiecai/Desktop/scientith_projects/code_clinic/src/codeclinic/api.py",
+      "package_depth": 1,
+      "graph_depth": 1,
+      "functions_total": 0,
+      "functions_public": 0,
+      "stubs": 0,
+      "stub_ratio": 0.0,
+      "completion_status": "完全实现",
+      "priority_score": 36.0
+    },
+    {
+      "name": "codeclinic.cli",
+      "node_type": "module",
+      "file_path": "/Users/junjiecai/Desktop/scientith_projects/code_clinic/src/codeclinic/cli.py",
+      "package_depth": 1,
+      "graph_depth": 1,
+      "functions_total": 0,
+      "functions_public": 0,
+      "stubs": 0,
+      "stub_ratio": 0.0,
+      "completion_status": "完全实现",
+      "priority_score": 36.0
+    },
+    {
+      "name": "codeclinic.stub",
+      "node_type": "module",
+      "file_path": "/Users/junjiecai/Desktop/scientith_projects/code_clinic/src/codeclinic/stub.py",
+      "package_depth": 1,
+      "graph_depth": 1,
+      "functions_total": 0,
+      "functions_public": 0,
+      "stubs": 0,
+      "stub_ratio": 0.0,
+      "completion_status": "完全实现",
+      "priority_score": 36.0
+    },
+    {
+      "name": "codeclinic.config_loader",
+      "node_type": "module",
+      "file_path": "/Users/junjiecai/Desktop/scientith_projects/code_clinic/src/codeclinic/config_loader.py",
+      "package_depth": 1,
+      "graph_depth": 2,
+      "functions_total": 0,
+      "functions_public": 0,
+      "stubs": 0,
+      "stub_ratio": 0.0,
+      "completion_status": "完全实现",
+      "priority_score": 32.0
+    },
+    {
+      "name": "codeclinic.data_collector",
+      "node_type": "module",
+      "file_path": "/Users/junjiecai/Desktop/scientith_projects/code_clinic/src/codeclinic/data_collector.py",
+      "package_depth": 1,
+      "graph_depth": 2,
+      "functions_total": 0,
+      "functions_public": 0,
+      "stubs": 0,
+      "stub_ratio": 0.0,
+      "completion_status": "完全实现",
+      "priority_score": 32.0
+    },
+    {
+      "name": "codeclinic.config",
+      "node_type": "module",
+      "file_path": "/Users/junjiecai/Desktop/scientith_projects/code_clinic/src/codeclinic/config.py",
+      "package_depth": 1,
+      "graph_depth": 2,
+      "functions_total": 0,
+      "functions_public": 0,
+      "stubs": 0,
+      "stub_ratio": 0.0,
+      "completion_status": "完全实现",
+      "priority_score": 32.0
+    },
+    {
+      "name": "codeclinic.violations_analysis",
+      "node_type": "module",
+      "file_path": "/Users/junjiecai/Desktop/scientith_projects/code_clinic/src/codeclinic/violations_analysis.py",
+      "package_depth": 1,
+      "graph_depth": 2,
+      "functions_total": 0,
+      "functions_public": 0,
+      "stubs": 0,
+      "stub_ratio": 0.0,
+      "completion_status": "完全实现",
+      "priority_score": 32.0
+    },
+    {
+      "name": "codeclinic.graphviz_render",
+      "node_type": "module",
+      "file_path": "/Users/junjiecai/Desktop/scientith_projects/code_clinic/src/codeclinic/graphviz_render.py",
+      "package_depth": 1,
+      "graph_depth": 2,
+      "functions_total": 0,
+      "functions_public": 0,
+      "stubs": 0,
+      "stub_ratio": 0.0,
+      "completion_status": "完全实现",
+      "priority_score": 32.0
+    },
+    {
+      "name": "codeclinic.stub_analysis",
+      "node_type": "module",
+      "file_path": "/Users/junjiecai/Desktop/scientith_projects/code_clinic/src/codeclinic/stub_analysis.py",
+      "package_depth": 1,
+      "graph_depth": 2,
+      "functions_total": 0,
+      "functions_public": 0,
+      "stubs": 0,
+      "stub_ratio": 0.0,
+      "completion_status": "完全实现",
+      "priority_score": 32.0
+    },
+    {
+      "name": "codeclinic.types",
+      "node_type": "module",
+      "file_path": "/Users/junjiecai/Desktop/scientith_projects/code_clinic/src/codeclinic/types.py",
+      "package_depth": 1,
+      "graph_depth": 2,
+      "functions_total": 0,
+      "functions_public": 0,
+      "stubs": 0,
+      "stub_ratio": 0.0,
+      "completion_status": "完全实现",
+      "priority_score": 32.0
+    },
+    {
+      "name": "codeclinic.json_output",
+      "node_type": "module",
+      "file_path": "/Users/junjiecai/Desktop/scientith_projects/code_clinic/src/codeclinic/json_output.py",
+      "package_depth": 1,
+      "graph_depth": 2,
+      "functions_total": 0,
+      "functions_public": 0,
+      "stubs": 0,
+      "stub_ratio": 0.0,
+      "completion_status": "完全实现",
+      "priority_score": 32.0
+    },
+    {
+      "name": "codeclinic.ast_scanner",
+      "node_type": "module",
+      "file_path": "/Users/junjiecai/Desktop/scientith_projects/code_clinic/src/codeclinic/ast_scanner.py",
+      "package_depth": 1,
+      "graph_depth": 2,
+      "functions_total": 0,
+      "functions_public": 0,
+      "stubs": 0,
+      "stub_ratio": 0.0,
+      "completion_status": "完全实现",
+      "priority_score": 32.0
+    },
+    {
+      "name": "codeclinic.stub_report",
+      "node_type": "module",
+      "file_path": "/Users/junjiecai/Desktop/scientith_projects/code_clinic/src/codeclinic/stub_report.py",
+      "package_depth": 1,
+      "graph_depth": 2,
+      "functions_total": 0,
+      "functions_public": 0,
+      "stubs": 0,
+      "stub_ratio": 0.0,
+      "completion_status": "完全实现",
+      "priority_score": 32.0
+    },
+    {
+      "name": "codeclinic.import_rules",
+      "node_type": "module",
+      "file_path": "/Users/junjiecai/Desktop/scientith_projects/code_clinic/src/codeclinic/import_rules.py",
+      "package_depth": 1,
+      "graph_depth": 3,
+      "functions_total": 0,
+      "functions_public": 0,
+      "stubs": 0,
+      "stub_ratio": 0.0,
+      "completion_status": "完全实现",
+      "priority_score": 28.0
+    },
+    {
+      "name": "codeclinic.graph_analysis",
+      "node_type": "module",
+      "file_path": "/Users/junjiecai/Desktop/scientith_projects/code_clinic/src/codeclinic/graph_analysis.py",
+      "package_depth": 1,
+      "graph_depth": 3,
+      "functions_total": 0,
+      "functions_public": 0,
+      "stubs": 0,
+      "stub_ratio": 0.0,
+      "completion_status": "完全实现",
+      "priority_score": 28.0
+    },
+    {
+      "name": "codeclinic.node_types",
+      "node_type": "module",
+      "file_path": "/Users/junjiecai/Desktop/scientith_projects/code_clinic/src/codeclinic/node_types.py",
+      "package_depth": 1,
+      "graph_depth": 3,
+      "functions_total": 0,
+      "functions_public": 0,
+      "stubs": 0,
+      "stub_ratio": 0.0,
+      "completion_status": "完全实现",
+      "priority_score": 28.0
+    }
+  ],
+  "depth_statistics": {
+    "by_package_depth": [
+      {
+        "depth": 0,
+        "nodes": 1,
+        "functions": 0,
+        "stubs": 0,
+        "stub_ratio": 0.0
+      },
+      {
+        "depth": 1,
+        "nodes": 17,
+        "functions": 0,
+        "stubs": 0,
+        "stub_ratio": 0.0
+      }
+    ],
+    "by_graph_depth": [
+      {
+        "depth": 0,
+        "nodes": 2,
+        "functions": 0,
+        "stubs": 0,
+        "stub_ratio": 0.0
+      },
+      {
+        "depth": 2,
+        "nodes": 10,
+        "functions": 0,
+        "stubs": 0,
+        "stub_ratio": 0.0
+      },
+      {
+        "depth": 3,
+        "nodes": 3,
+        "functions": 0,
+        "stubs": 0,
+        "stub_ratio": 0.0
+      },
+      {
+        "depth": 1,
+        "nodes": 3,
+        "functions": 0,
+        "stubs": 0,
+        "stub_ratio": 0.0
+      }
+    ]
+  },
+  "stub_functions": [],
+  "recommendations": [],
+  "trend_analysis": {
+    "most_stubbed_nodes": [],
+    "high_priority_nodes": [],
+    "critical_dependencies": []
+  }
+}
