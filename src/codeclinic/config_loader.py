@@ -82,7 +82,8 @@ def load_config(config_path: Optional[Path] = None) -> ExtendedConfig:
         print(f"找到配置文件: {found_config}")
         return _load_config_file(found_config)
     
-    print("未找到配置文件，使用默认配置")
+    # 使用默认配置时显示详细提示
+    _show_default_config_info()
     return ExtendedConfig()
 
 
@@ -291,3 +292,19 @@ def load_legacy_config(cwd: str = None):
     # 如果没有找到新配置，尝试加载旧版配置
     from .config import Config
     return Config.from_files(cwd)
+
+
+def _show_default_config_info() -> None:
+    """显示默认配置信息"""
+    print("📋 使用默认配置:")
+    print("━" * 40)
+    print("🔒 导入规则:")
+    print("  ❌ 跨包导入 (禁止)")
+    print("  ❌ 向上导入 (禁止)")
+    print("  ❌ 跳级导入 (禁止)")
+    print("  📝 白名单: 无")
+    print()
+    print("💡 提示:")
+    print("  • 生成配置: 'codeclinic --init'")
+    print("  • 查看配置: 'codeclinic --show-config'")
+    print("  • 编辑配置: 修改 codeclinic.yaml")

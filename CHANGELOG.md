@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3b1] - 2025-09-03
+
+### ✨ Added
+- **Configuration management commands**: New CLI commands for configuration management
+  - `--init`: Generate default configuration file with detailed comments
+  - `--show-config`: Display current effective configuration with visual formatting
+- **Enhanced default configuration display**: Improved user experience when no config file exists
+  - Clear visualization of active rules with icons and colors  
+  - Helpful hints for configuration creation and customization
+  - Transparent display of default import rules and settings
+- **Comprehensive configuration template**: Generated `codeclinic.yaml` includes:
+  - Detailed comments explaining each configuration option
+  - Example configurations for common use cases
+  - Best practice recommendations and usage tips
+  - Clear section organization (basic settings, file filtering, import rules)
+
+### 🔧 Enhanced
+- **CLI argument handling**: 
+  - Made `--path` argument optional when using configuration commands
+  - Better error messages with actionable suggestions
+  - Improved help text for new commands
+- **Configuration loading robustness**: Fixed null pointer issues in white_list handling
+- **User experience**: More informative output with consistent visual formatting
+
+### 🐛 Fixed
+- **Configuration parsing**: Fixed error when `white_list` is None in loaded configuration
+- **CLI flow**: Proper handling of configuration-only commands without requiring analysis parameters
+
+### 📚 Documentation
+- Added comprehensive inline documentation in generated configuration files
+- Improved CLI help messages for better discoverability
+
 ## [0.1.3a1] - 2025-09-03
 
 ### ✨ Added

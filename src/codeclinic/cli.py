@@ -34,7 +34,13 @@ def main() -> None:
         prog="codeclinic",
         description="Diagnose your Python project: import graph + stub metrics + import rules compliance",
     )
-    parser.add_argument("--path", required=True, help="Root path to scan (package folder or src root)")
+    
+    # 配置管理命令
+    parser.add_argument("--init", action="store_true", help="Generate default configuration file (codeclinic.yaml)")
+    parser.add_argument("--show-config", action="store_true", help="Show current effective configuration")
+    
+    # 分析参数
+    parser.add_argument("--path", help="Root path to scan (package folder or src root)")
     parser.add_argument("--out", default=None, help="Output directory for results (default: ./codeclinic_results)")
     parser.add_argument("--format", default=None, choices=["svg", "png", "pdf", "dot", "json"], help="Output format (svg/png/pdf/dot for visualization, json for data)")
     parser.add_argument("--aggregate", default=None, choices=["module", "package"], help="Aggregate nodes by module or package")
@@ -42,6 +48,26 @@ def main() -> None:
     parser.add_argument("--legacy", action="store_true", help="Use legacy analysis mode (backward compatibility)")
 
     args = parser.parse_args()
+
+    # 处理配置管理命令
+    if args.init:
+        from codeclinic.config_init import init_config
+        init_config()
+        return
+    
+    if args.show_config:
+        from codeclinic.config_init import show_config
+        show_config()
+        return
+    
+    # 如果没有指定 --path，要求用户提供
+    if not args.path:
+        print("❌ 错误: 必须指定 --path 参数")
+        print("💡 提示:")
+        print("  • 分析项目: codeclinic --path /path/to/project")
+        print("  • 生成配置: codeclinic --init")
+        print("  • 查看配置: codeclinic --show-config")
+        sys.exit(1)
 
     # 如果使用legacy模式，调用旧版本函数
     if args.legacy:
@@ -53,7 +79,8 @@ def main() -> None:
     # 1. 加载配置
     try:
         config = load_config()
-        print(f"已加载配置: {len(config.import_rules.white_list)} 个白名单项")
+        white_list_count = len(config.import_rules.white_list) if config.import_rules.white_list else 0
+        print(f"已加载配置: {white_list_count} 个白名单项")
     except Exception as e:
         print(f"警告: 配置加载失败，使用默认配置: {e}")
         config = ExtendedConfig()
