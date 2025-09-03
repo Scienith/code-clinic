@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "codeclinic"
-version = "0.1.0"
+version = "0.1.1"
 description = "X-ray your Python project: import graph + stub maturity metrics + Graphviz viz + CLI"
 readme = "README.md"
 authors = [{ name = "CodeClinic Team", email = "codeclinic@example.com" }]
@@ -30,10 +30,10 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/codeclinic/codeclinic"
-Repository = "https://github.com/codeclinic/codeclinic"
-Issues = "https://github.com/codeclinic/codeclinic/issues"
-Documentation = "https://github.com/codeclinic/codeclinic#readme"
+Homepage = "https://github.com/Scienith/code-clinic"
+Repository = "https://github.com/Scienith/code-clinic"
+Issues = "https://github.com/Scienith/code-clinic/issues"
+Documentation = "https://github.com/Scienith/code-clinic#readme"
 
 [project.scripts]
 codeclinic = "codeclinic.cli:main"
@@ -47,6 +47,7 @@ include = [
   "/pyproject.toml",
   "/README.md",
   "/PUBLISH.md",
+  "/CHANGELOG.md",
 ]
 exclude = [
   "/.claude",
@@ -70,6 +71,6 @@ exclude = ["**/tests/**", "**/.venv/**", "**/venv/**", "**/__pycache__/**", "**/
 aggregate = "module"
 # Graphviz output
 format = "svg"
-output = "codeclinic_graph"
+output = "codeclinic_results"
 # Count private functions (prefixed with _) in metrics?
 count_private = false

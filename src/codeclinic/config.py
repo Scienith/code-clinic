@@ -19,7 +19,7 @@ class Config:
     ])
     aggregate: str = "module"  # or "package"
     format: str = "svg"
-    output: str = "codeclinic_graph"
+    output: str = "codeclinic_results"
     count_private: bool = False
 
     @classmethod

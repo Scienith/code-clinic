@@ -8,10 +8,10 @@ import ast
 import os
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
-from .types import ModuleStats, Modules, GraphEdges, ChildEdges
+from .types import ModuleStats, Modules, GraphEdges, ChildEdges, StubFunction, StubFunctions
 
 
-def scan_project_ast(paths: List[str], include: List[str], exclude: List[str], count_private: bool) -> Tuple[Modules, GraphEdges, ChildEdges]:
+def scan_project_ast(paths: List[str], include: List[str], exclude: List[str], count_private: bool) -> Tuple[Modules, GraphEdges, ChildEdges, StubFunctions]:
     """
     Scan project using pure AST analysis.
     
@@ -24,6 +24,7 @@ def scan_project_ast(paths: List[str], include: List[str], exclude: List[str], c
     modules: Modules = {}
     edges: GraphEdges = set()
     child_edges: ChildEdges = set()
+    stub_functions: StubFunctions = []
     
     # First pass: collect all Python files and create module mapping
     all_files: Dict[str, Path] = {}  # module_name -> file_path
@@ -46,8 +47,9 @@ def scan_project_ast(paths: List[str], include: List[str], exclude: List[str], c
     # Second pass: analyze each file for functions/stubs and imports
     for module_name, file_path in all_files.items():
         # Analyze functions and stubs
-        stats = _count_functions_and_stubs(file_path, module_name, count_private)
+        stats, stubs = _count_functions_and_stubs(file_path, module_name, count_private)
         modules[module_name] = stats
+        stub_functions.extend(stubs)
         
         # Analyze imports
         imports = _extract_imports(file_path)
@@ -65,7 +67,7 @@ def scan_project_ast(paths: List[str], include: List[str], exclude: List[str], c
             if parent in modules:
                 child_edges.add((parent, module_name))
     
-    return modules, edges, child_edges
+    return modules, edges, child_edges, stub_functions
 
 
 def _collect_python_files(base_path: Path, include: List[str], exclude: List[str]) -> List[Path]:
@@ -213,18 +215,27 @@ def _resolve_import(imported_name: str, importer_module: str, all_modules: Dict[
     return None
 
 
-def _count_functions_and_stubs(file_path: Path, module_name: str, count_private: bool) -> ModuleStats:
+def _count_functions_and_stubs(file_path: Path, module_name: str, count_private: bool) -> Tuple[ModuleStats, StubFunctions]:
     """Count functions and @stub decorators in a file."""
     try:
         content = file_path.read_text(encoding='utf-8', errors='ignore')
         tree = ast.parse(content, filename=str(file_path))
     except (OSError, SyntaxError) as e:
         print(f"Warning: Could not parse {file_path}: {e}")
-        return ModuleStats(name=module_name, file=str(file_path))
+        return ModuleStats(name=module_name, file=str(file_path)), []
     
     total = 0
     public = 0
     stubs = 0
+    stub_functions: StubFunctions = []
+    
+    def get_docstring(node: ast.FunctionDef | ast.AsyncFunctionDef) -> Optional[str]:
+        """Extract docstring from function/method node."""
+        if (node.body and isinstance(node.body[0], ast.Expr) and 
+            isinstance(node.body[0].value, ast.Constant) and 
+            isinstance(node.body[0].value.value, str)):
+            return node.body[0].value.value.strip()
+        return None
     
     def is_stub_decorator(dec: ast.AST) -> bool:
         """Check if decorator is @stub."""
@@ -250,18 +261,74 @@ def _count_functions_and_stubs(file_path: Path, module_name: str, count_private:
         return name.endswith(".stub") or name == "stub"
     
     class FunctionVisitor(ast.NodeVisitor):
+        def __init__(self):
+            self.current_class = None
+            self.class_stack = []
+        
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            self.class_stack.append(self.current_class)
+            self.current_class = node.name
+            self.generic_visit(node)
+            self.current_class = self.class_stack.pop()
+        
         def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
             nonlocal total, public, stubs
             total += 1
             is_public = not node.name.startswith("_") or count_private
             if is_public:
                 public += 1
-            if any(is_stub_decorator(d) for d in node.decorator_list):
+            
+            has_stub = any(is_stub_decorator(d) for d in node.decorator_list)
+            if has_stub:
                 stubs += 1
+                # Create StubFunction record
+                full_name = node.name
+                if self.current_class:
+                    full_name = f"{self.current_class}.{node.name}"
+                
+                stub_func = StubFunction(
+                    module_name=module_name,
+                    file_path=str(file_path),
+                    function_name=node.name,
+                    full_name=full_name,
+                    docstring=get_docstring(node),
+                    line_number=node.lineno,
+                    is_method=self.current_class is not None,
+                    class_name=self.current_class
+                )
+                stub_functions.append(stub_func)
+            
             self.generic_visit(node)
         
         def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-            self.visit_FunctionDef(node)  # Same logic
+            # Same logic as FunctionDef
+            nonlocal total, public, stubs
+            total += 1
+            is_public = not node.name.startswith("_") or count_private
+            if is_public:
+                public += 1
+            
+            has_stub = any(is_stub_decorator(d) for d in node.decorator_list)
+            if has_stub:
+                stubs += 1
+                # Create StubFunction record
+                full_name = node.name
+                if self.current_class:
+                    full_name = f"{self.current_class}.{node.name}"
+                
+                stub_func = StubFunction(
+                    module_name=module_name,
+                    file_path=str(file_path),
+                    function_name=node.name,
+                    full_name=full_name,
+                    docstring=get_docstring(node),
+                    line_number=node.lineno,
+                    is_method=self.current_class is not None,
+                    class_name=self.current_class
+                )
+                stub_functions.append(stub_func)
+            
+            self.generic_visit(node)
     
     FunctionVisitor().visit(tree)
     return ModuleStats(
@@ -270,4 +337,4 @@ def _count_functions_and_stubs(file_path: Path, module_name: str, count_private:
         functions_total=total,
         functions_public=public,
         stubs=stubs
-    )
+    ), stub_functions

@@ -2,6 +2,7 @@
 from example_project.A.A1 import process_data
 from example_project.A.A2 import validate_input, transform_data
 from example_project.common import BaseProcessor, get_base_config
+from codeclinic.stub import stub
 
 def main_workflow(data):
     """Main workflow function that orchestrates the process."""
@@ -36,3 +37,37 @@ class DataProcessor(BaseProcessor):
     def clear_cache(self):
         """Clear the processing cache."""
         self.cache.clear()
+    
+    @stub
+    def advanced_process(self, items):
+        """
+        Advanced processing method that is not yet implemented.
+        
+        This method would handle batch processing with optimization
+        and error handling for complex data structures.
+        
+        Args:
+            items: List of items to process in batch
+            
+        Returns:
+            Dict containing processed results and metadata
+        """
+        pass
+
+
+@stub
+def experimental_workflow(data, config=None):
+    """
+    Experimental workflow that combines multiple processing steps.
+    
+    This is a planned feature that will integrate machine learning
+    capabilities for enhanced data processing.
+    
+    Args:
+        data: Input data dictionary
+        config: Optional configuration parameters
+        
+    Returns:
+        Enhanced processing results
+    """
+    pass

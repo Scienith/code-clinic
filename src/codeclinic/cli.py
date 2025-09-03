@@ -17,6 +17,8 @@ from codeclinic.ast_scanner import scan_project_ast as scan_project
 from codeclinic.graphviz_render import render_graph
 from codeclinic.config import Config
 from codeclinic.types import ModuleStats, Modules, GraphEdges
+from codeclinic.json_output import save_json_output
+from codeclinic.stub_report import save_stub_report
 
 
 def main() -> None:
@@ -25,8 +27,8 @@ def main() -> None:
         description="Diagnose your Python project: import graph + stub metrics + Graphviz rendering",
     )
     parser.add_argument("--path", required=True, help="Root path to scan (package folder or src root)")
-    parser.add_argument("--out", default=None, help="Output base path for DOT/visual files (default: ./codeclinic_graph)")
-    parser.add_argument("--format", default=None, choices=["svg", "png", "pdf", "dot"], help="Graphviz output format")
+    parser.add_argument("--out", default=None, help="Output directory for results (default: ./codeclinic_results)")
+    parser.add_argument("--format", default=None, choices=["svg", "png", "pdf", "dot", "json"], help="Output format (svg/png/pdf/dot for visualization, json for data)")
     parser.add_argument("--aggregate", default=None, choices=["module", "package"], help="Aggregate nodes by module or package")
     parser.add_argument("--count-private", action="store_true", help="Count private (_prefixed) functions in metrics")
 
@@ -44,7 +46,7 @@ def main() -> None:
     if args.count_private:
         cfg.count_private = True
 
-    modules, edges, child_edges = scan_project(cfg.paths, cfg.include, cfg.exclude, cfg.count_private)
+    modules, edges, child_edges, stub_functions = scan_project(cfg.paths, cfg.include, cfg.exclude, cfg.count_private)
 
     if cfg.aggregate == "package":
         modules, edges = _aggregate_to_packages(modules, edges)
@@ -52,12 +54,33 @@ def main() -> None:
 
     _print_summary(modules, edges, child_edges, root=args.path)
 
-    dot_path, viz_path = render_graph(modules, edges, child_edges, cfg.output, cfg.format)
-    print(f"\nDOT saved to: {dot_path}")
-    if viz_path:
-        print(f"Rendered graph saved to: {viz_path}")
+    # Create output directory
+    output_dir = Path(cfg.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    print(f"\nOutput directory: {output_dir.absolute()}")
+
+    # Always generate JSON output
+    json_path = save_json_output(modules, edges, child_edges, args.path, output_dir / "analysis.json")
+    print(f"✓ JSON analysis saved to: {json_path}")
+    
+    # Generate stub function report
+    if stub_functions:
+        stub_report_path = save_stub_report(stub_functions, edges, args.path, output_dir / "stub_report.json")
+        print(f"✓ Stub function report saved to: {stub_report_path}")
     else:
-        print("Graphviz 'dot' executable not found. Install Graphviz to render (still wrote .dot).")
+        print("✓ No stub functions found in project")
+
+    # Always generate visualization (unless explicitly JSON-only)
+    graph_base = output_dir / "dependency_graph"
+    dot_path, viz_path = render_graph(modules, edges, child_edges, str(graph_base), cfg.format)
+    print(f"✓ DOT file saved to: {dot_path}")
+    if viz_path:
+        print(f"✓ Visualization saved to: {viz_path}")
+    else:
+        print("⚠ Graphviz 'dot' executable not found. Install Graphviz to render visualizations (DOT file still created).")
+    
+    print(f"\n📁 All results saved in: {output_dir.absolute()}")
 
 
 def _aggregate_to_packages(modules, edges):
