@@ -22,14 +22,28 @@ def analyze_stub_completeness(project_data: ProjectData) -> Dict[str, Any]:
     """
     print("开始分析Stub完整度...")
     
-    # 收集所有stub函数
-    stub_functions = project_data.stub_functions
+    # 收集所有stub函数，添加深度信息
+    stub_functions = []
+    for func in project_data.stub_functions:
+        # 找到函数所属的节点来获取深度信息
+        node = project_data.nodes.get(func.module_name)
+        if node:
+            stub_func_data = {
+                "name": func.name,
+                "full_name": func.full_name,
+                "module_name": func.module_name,
+                "file_path": func.file_path,
+                "line_number": func.line_number,
+                "is_method": func.is_method,
+                "class_name": func.class_name,
+                "docstring": func.docstring,
+                "package_depth": node.package_depth,
+                "graph_depth": node.graph_depth
+            }
+            stub_functions.append(stub_func_data)
     
-    # 按节点分组统计
-    node_stats = _calculate_node_stub_stats(project_data.nodes)
-    
-    # 按深度分组统计  
-    depth_stats = _calculate_depth_stub_stats(project_data.nodes)
+    # 按package_depth降序排列
+    stub_functions.sort(key=lambda x: x["package_depth"], reverse=True)
     
     # 全局统计
     total_functions = sum(node.functions_public for node in project_data.nodes.values())
@@ -37,20 +51,7 @@ def analyze_stub_completeness(project_data: ProjectData) -> Dict[str, Any]:
     global_stub_ratio = total_stubs / max(1, total_functions)
     
     result = {
-        "summary": {
-            "total_nodes": len(project_data.nodes),
-            "total_functions": total_functions,
-            "total_public_functions": total_functions,  # 这里假设统计的就是public
-            "total_stubs": total_stubs,
-            "global_stub_ratio": global_stub_ratio,
-            "nodes_with_stubs": len([n for n in project_data.nodes.values() if n.stubs > 0]),
-            "fully_stubbed_nodes": len([n for n in project_data.nodes.values() if n.stub_ratio >= 1.0]),
-            "fully_implemented_nodes": len([n for n in project_data.nodes.values() if n.stub_ratio == 0.0])
-        },
-        "node_stats": node_stats,
-        "depth_stats": depth_stats,
-        "stub_functions": stub_functions,
-        "completion_distribution": _calculate_completion_distribution(project_data.nodes)
+        "stub_functions": stub_functions
     }
     
     print(f"Stub分析完成: {total_stubs}/{total_functions} 函数为stub ({global_stub_ratio:.1%})")
@@ -247,22 +248,7 @@ def save_stub_report(
 
 
 def _prepare_stub_json_data(stub_data: Dict[str, Any], project_data: ProjectData) -> Dict[str, Any]:
-    """准备Stub分析的JSON输出数据"""
-    
-    # 转换stub函数为可序列化格式
-    stub_functions_data = []
-    for func in stub_data["stub_functions"]:
-        func_data = {
-            "module_name": func.module_name,
-            "function_name": func.function_name,
-            "full_name": func.full_name,
-            "file_path": func.file_path,
-            "line_number": func.line_number,
-            "is_method": func.is_method,
-            "class_name": func.class_name,
-            "docstring": func.docstring
-        }
-        stub_functions_data.append(func_data)
+    """准备Stub分析的JSON输出数据 - 只保留stub_functions"""
     
     json_data = {
         "version": "1.0",
@@ -270,39 +256,8 @@ def _prepare_stub_json_data(stub_data: Dict[str, Any], project_data: ProjectData
         "project_root": project_data.project_root,
         "analysis_type": "stub_completeness",
         
-        # 全局摘要
-        "summary": stub_data["summary"],
-        
-        # 完整度分布
-        "completion_distribution": stub_data["completion_distribution"],
-        
-        # 按节点统计
-        "node_statistics": stub_data["node_stats"],
-        
-        # 按深度统计
-        "depth_statistics": stub_data["depth_stats"],
-        
-        # 详细的stub函数列表
-        "stub_functions": stub_functions_data,
-        
-        # 实现建议
-        "recommendations": _generate_stub_recommendations(stub_data),
-        
-        # 趋势分析
-        "trend_analysis": {
-            "most_stubbed_nodes": [
-                stat for stat in stub_data["node_stats"] 
-                if stat["stub_ratio"] > 0.8
-            ][:10],
-            "high_priority_nodes": [
-                stat for stat in stub_data["node_stats"] 
-                if stat["priority_score"] > 50
-            ][:10],
-            "critical_dependencies": [
-                stat for stat in stub_data["node_stats"] 
-                if stat["graph_depth"] <= 1 and stat["stub_ratio"] > 0.5
-            ]
-        }
+        # 只保留stub函数列表，已包含package_depth和graph_depth
+        "stub_functions": stub_data["stub_functions"]
     }
     
     return json_data

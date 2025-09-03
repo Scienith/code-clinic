@@ -25,6 +25,8 @@ class FunctionInfo:
     line_number: int               # 行号
     is_method: bool = False        # 是否为方法
     class_name: Optional[str] = None  # 所属类名
+    module_name: str = ""          # 所属模块名（向后兼容）
+    file_path: str = ""            # 文件路径（向后兼容）
 
 
 @dataclass
@@ -57,16 +59,21 @@ class NodeInfo:
     
     def __post_init__(self):
         """计算衍生属性"""
-        self.functions_total = len(self.functions) + sum(len(methods) for methods in self.classes.values())
-        self.functions_public = (
-            len([f for f in self.functions if f.is_public]) +
-            sum(len([m for m in methods if m.is_public]) for methods in self.classes.values())
-        )
-        self.stubs = (
-            len([f for f in self.functions if f.is_stub]) +
-            sum(len([m for m in methods if m.is_stub]) for methods in self.classes.values())
-        )
-        self.stub_ratio = self.stubs / max(1, self.functions_public) if self.functions_public > 0 else 0.0
+        # 计算总函数数（包括所有函数和方法）
+        total_functions = len(self.functions)
+        total_public_functions = len([f for f in self.functions if f.is_public])
+        total_stubs = len([f for f in self.functions if f.is_stub])
+        
+        # 添加类方法统计
+        for methods in self.classes.values():
+            total_functions += len(methods)
+            total_public_functions += len([m for m in methods if m.is_public])
+            total_stubs += len([m for m in methods if m.is_stub])
+        
+        self.functions_total = total_functions
+        self.functions_public = total_public_functions
+        self.stubs = total_stubs
+        self.stub_ratio = total_stubs / max(1, total_public_functions) if total_public_functions > 0 else 0.0
         self.package_depth = self.name.count('.')
 
 

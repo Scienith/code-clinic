@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3a1] - 2025-09-03
+
+### ✨ Added
+- **Import rule validation**: Comprehensive validation of Python import relationships with configurable rules
+  - Cross-package import detection and validation
+  - Upward import prevention (child importing from parent)
+  - Skip-level import detection (bypassing intermediate modules)
+  - White-list configuration for allowed cross-package imports
+- **YAML configuration support**: New `codeclinic.yaml` configuration format with fallback to TOML
+- **Specialized analysis modules**: Separate analysis for import violations and stub completeness
+  - `import_violations/violations.json` - Detailed import rule violations with severity levels
+  - `stub_completeness/stub_summary.json` - Simplified stub function reports with depth metrics
+- **Enhanced visualization**: 
+  - Stub heatmap with HTML progress bars showing implementation completeness
+  - Color-coded progress indicators (green for implemented, gray for stubs)
+  - Simplified node names displaying only the last component (e.g., "A11" instead of "A.A1.A11")
+- **Depth-based analysis**:
+  - `package_depth`: Directory structure depth (0 for root level, +1 per directory)
+  - `graph_depth`: Import dependency depth (0 for root dependencies, +1 per import level)
+  - Stub functions sorted by package_depth (descending) for implementation priority
+
+### 🔧 Enhanced
+- **Data collection improvements**: Fixed import resolution logic for project-relative imports
+- **JSON output simplification**: Streamlined outputs to contain only essential information
+  - Violations analysis: Only violation details
+  - Stub analysis: Only stub function information with depth metrics
+- **Node type distinction**: Clear separation between MODULE (single .py files) and PACKAGE (directories with __init__.py)
+- **Progress visualization**: HTML-based progress bars in Graphviz for better visual feedback
+
+### 🐛 Fixed
+- **Import detection**: Fixed major issue where 0 import edges were being detected
+- **Function metadata**: Added missing `module_name` and `file_path` fields to `FunctionInfo`
+- **JSON serialization**: Fixed serialization errors with configuration objects
+- **Display formatting**: Corrected attribute access patterns for violation objects
+
+### 📊 Technical Improvements
+- Unified data collection with specialized analysis modules
+- BFS-based graph depth calculation for accurate dependency levels
+- Enhanced AST analysis for better import detection
+- Improved error handling and warning messages
+
 ## [0.1.2] - 2025-01-09
 
 ### 🐛 Fixed

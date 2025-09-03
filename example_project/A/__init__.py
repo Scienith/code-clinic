@@ -1,6 +1,7 @@
 # Package A - depends on A1 and A2 and common
 from example_project.A.A1 import process_data
 from example_project.A.A2 import validate_input, transform_data
+from example_project.A.A1.A11 import compute_metrics, generate_report  # 新增依赖A11
 from example_project.common import BaseProcessor, get_base_config
 from codeclinic.stub import stub
 
@@ -9,7 +10,10 @@ def main_workflow(data):
     if validate_input(data):
         processed = process_data(data)
         result = transform_data(processed)
-        return result
+        # 使用A11的功能生成报告和指标
+        metrics = compute_metrics(result)
+        report = generate_report(result, metrics)
+        return {"result": result, "metrics": metrics, "report": report}
     return None
 
 def analyze_results(results):

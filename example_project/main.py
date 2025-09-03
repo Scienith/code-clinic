@@ -17,10 +17,10 @@ def main():
 def incomplete_feature(data):
     """
     This feature is not yet implemented.
-    
+
     Args:
         data: Input data to process
-    
+
     Returns:
         Processed data
     """

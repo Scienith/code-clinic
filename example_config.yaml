@@ -10,7 +10,8 @@ count_private: false
 # 导入规则配置
 import_rules:
   # 白名单：这些模块可以被任何地方导入
-  white_list: ["common"]
+  white_list:
+    - example_project.common
     
   # 规则开关
   rules:

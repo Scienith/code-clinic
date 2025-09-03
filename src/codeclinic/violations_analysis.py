@@ -19,30 +19,20 @@ def analyze_violations(project_data: ProjectData) -> Dict[str, Any]:
         project_data: 项目数据
         
     Returns:
-        Dict: 违规分析结果
+        Dict: 违规分析结果 - 只包含violations
     """
     print("开始分析导入违规...")
     
     # 检查违规
     violations = check_import_violations(project_data)
     
-    # 分类边
-    legal_edges, violation_edges = categorize_edges(project_data, violations)
-    
-    # 生成摘要
-    summary = generate_violation_summary(violations)
-    
-    # 分析结果
+    # 分析结果 - 只保留violations
     result = {
-        "summary": summary,
-        "violations": violations,
-        "legal_edges": legal_edges,
-        "violation_edges": violation_edges,
-        "total_edges": len(project_data.import_edges),
-        "compliance_rate": len(legal_edges) / max(1, len(project_data.import_edges))
+        "violations": violations
     }
     
-    print(f"违规分析完成: 发现 {len(violations)} 个违规，合规率 {result['compliance_rate']:.1%}")
+    compliance_rate = 1 - (len(violations) / max(1, len(project_data.import_edges)))
+    print(f"违规分析完成: 发现 {len(violations)} 个违规，合规率 {compliance_rate:.1%}")
     
     return result
 
@@ -86,27 +76,14 @@ def save_violations_report(
 
 
 def _prepare_json_data(violations_data: Dict[str, Any], project_data: ProjectData) -> Dict[str, Any]:
-    """准备JSON输出数据"""
+    """准备JSON输出数据 - 只保留violations"""
     json_data = {
         "version": "1.0",
         "timestamp": project_data.timestamp,
         "project_root": project_data.project_root,
         "analysis_type": "import_violations",
         
-        # 统计摘要
-        "summary": {
-            "total_nodes": len(project_data.nodes),
-            "total_import_edges": len(project_data.import_edges),
-            "total_violations": violations_data["summary"]["total_violations"],
-            "compliance_rate": violations_data["compliance_rate"],
-            "violations_by_type": violations_data["summary"]["by_type"],
-            "violations_by_severity": violations_data["summary"]["by_severity"]
-        },
-        
-        # 配置信息
-        "rules_applied": _extract_rules_config(project_data.config),
-        
-        # 违规详情
+        # 只保留违规详情
         "violations": [
             {
                 "id": i + 1,
@@ -119,33 +96,7 @@ def _prepare_json_data(violations_data: Dict[str, Any], project_data: ProjectDat
                 "to_node_type": project_data.nodes.get(v.to_node, {}).node_type.value if project_data.nodes.get(v.to_node) else "unknown"
             }
             for i, v in enumerate(violations_data["violations"])
-        ],
-        
-        # 边分类
-        "edge_classification": {
-            "legal_edges": [
-                {
-                    "from": edge[0],
-                    "to": edge[1],
-                    "status": "legal"
-                }
-                for edge in sorted(violations_data["legal_edges"])
-            ],
-            "violation_edges": [
-                {
-                    "from": edge[0],
-                    "to": edge[1],
-                    "status": "violation"
-                }
-                for edge in sorted(violations_data["violation_edges"])
-            ]
-        },
-        
-        # 节点违规统计
-        "node_violation_stats": _calculate_node_violation_stats(violations_data["violations"]),
-        
-        # 建议
-        "recommendations": _generate_recommendations(violations_data["violations"])
+        ]
     }
     
     return json_data

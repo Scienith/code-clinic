@@ -16,21 +16,14 @@ def _color_for_ratio(r: float) -> str:
 
 
 def _get_short_name(module_name: str) -> str:
-    """Get a shortened display name for a module."""
+    """Get a shortened display name for a module - only last part."""
+    if not module_name:
+        return "root"
+    
     parts = module_name.split('.')
     
-    if len(parts) == 1:
-        # Top level: "example_project" -> "example_project"
-        return parts[0]
-    elif len(parts) == 2:
-        # Second level: "example_project.A" -> "A"
-        return parts[1]
-    else:
-        # Deeper levels: "example_project.A.A1.A11" -> "A1.A11"
-        # Show last two parts to maintain context
-        return '.'.join(parts[-2:])
-        # Alternative: show only the last part
-        # return parts[-1]
+    # Always show only the last part
+    return parts[-1]
 
 
 def render_graph(modules: Modules, edges: GraphEdges, child_edges: ChildEdges, output_base: str, fmt: str = "svg") -> Tuple[str, str]:
@@ -158,7 +151,7 @@ def render_stub_heatmap(
     """
     dot = Digraph(
         "stub_heatmap",
-        graph_attr={"rankdir": "TB", "splines": "spline", "label": "Stub Completeness Heatmap", "labelloc": "t"},
+        graph_attr={"rankdir": "TB", "splines": "spline", "label": "Implementation Completeness Heatmap\\nProgress: 🟩 Implemented  ⬜ Stub", "labelloc": "t"},
         node_attr={"shape": "box", "style": "rounded,filled", "fontname": "Helvetica"},
         edge_attr={"arrowhead": "vee", "color": "#999999"},
     )
@@ -169,9 +162,8 @@ def render_stub_heatmap(
         ratio = node.stub_ratio
         pct = int(round(ratio * 100))
         
-        # 计算从白色到红色的渐变
-        # 白色 #FFFFFF (100% 实现) 到 红色 #FF0000 (100% stub)
-        color = _stub_ratio_to_color(ratio)
+        # 使用统一的白色背景，不需要颜色渐变
+        color = "#FFFFFF"
         
         # 根据节点类型调整显示
         if node.node_type == NodeType.PACKAGE:
@@ -183,14 +175,21 @@ def render_stub_heatmap(
             style = "rounded,filled"
             type_indicator = "📄"  # file emoji
         
-        # 创建标签
-        label = f"{type_indicator} {display_name}\n{node.stubs}/{node.functions_public} stub ({pct}%)"
+        # 创建进度条使用HTML表格渐变
+        progress_bar = _create_html_progress_bar(ratio)
         
-        # 如果完全未实现，使用特殊标记
-        if ratio >= 1.0:
-            label += "\n⚠️ 未实现"
-        elif ratio == 0.0:
-            label += "\n✅ 已实现"
+        # 计算实现比例（非stub）
+        implemented = node.functions_public - node.stubs
+        implemented_pct = int(round((1.0 - ratio) * 100))
+        
+        # 创建HTML标签包含进度条
+        label = f'''<
+        <TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0">
+            <TR><TD>{type_indicator} {display_name}</TD></TR>
+            <TR><TD>{implemented}/{node.functions_public} ({implemented_pct}%)</TD></TR>
+            <TR><TD>{progress_bar}</TD></TR>
+        </TABLE>
+        >'''
         
         dot.node(name, label=label, fillcolor=color, shape=shape, style=style)
 
@@ -214,6 +213,92 @@ def render_stub_heatmap(
         svg_path = ""
     
     return dot_path, svg_path
+
+
+def _create_html_progress_bar(ratio: float, width: int = 120) -> str:
+    """
+    创建HTML表格形式的进度条，简洁显示
+    
+    Args:
+        ratio: stub比例 (0.0 到 1.0)
+        width: 进度条像素宽度
+        
+    Returns:
+        str: HTML表格进度条
+    """
+    # 计算实现比例（1 - stub_ratio）
+    completion_ratio = 1.0 - ratio
+    completion_pct = int(round(completion_ratio * 100))
+    
+    # 计算进度条填充宽度
+    filled_width = int(width * completion_ratio)
+    empty_width = width - filled_width
+    
+    if completion_ratio >= 1.0:
+        # 100% 完成 - 全绿色，只在第一个节点显示百分比
+        progress_bar = f'''<TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" STYLE="ROUNDED">
+            <TR>
+                <TD WIDTH="{width}" HEIGHT="14" BGCOLOR="green"></TD>
+            </TR>
+        </TABLE>'''
+    else:
+        # 部分完成 - 绿色+灰色分段，只在第一个遇到的部分完成节点显示百分比
+        if filled_width > 0 and empty_width > 0:
+            progress_bar = f'''<TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" STYLE="ROUNDED">
+                <TR>
+                    <TD WIDTH="{filled_width}" HEIGHT="14" BGCOLOR="green"></TD>
+                    <TD WIDTH="{empty_width}" HEIGHT="14" BGCOLOR="lightgray"></TD>
+                </TR>
+            </TABLE>'''
+        elif filled_width <= 0:
+            # 几乎没有完成
+            progress_bar = f'''<TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" STYLE="ROUNDED">
+                <TR>
+                    <TD WIDTH="{width}" HEIGHT="14" BGCOLOR="lightgray"></TD>
+                </TR>
+            </TABLE>'''
+        else:
+            # 几乎全部完成
+            progress_bar = f'''<TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" STYLE="ROUNDED">
+                <TR>
+                    <TD WIDTH="{width}" HEIGHT="14" BGCOLOR="green"></TD>
+                </TR>
+            </TABLE>'''
+    
+    return progress_bar
+
+
+def _create_progress_bar(ratio: float, width: int = 10) -> str:
+    """
+    创建统一的进度条，用简洁的符号体现完成度
+    
+    Args:
+        ratio: stub比例 (0.0 到 1.0)
+        width: 进度条宽度
+        
+    Returns:
+        str: 进度条字符串
+    """
+    # 计算实现比例（1 - stub_ratio）
+    completion_ratio = 1.0 - ratio
+    completion_pct = int(round(completion_ratio * 100))
+    
+    # 计算进度条填充长度
+    filled_length = int(width * completion_ratio)
+    empty_length = width - filled_length
+    
+    # 尝试不同的进度条样式
+    if completion_ratio >= 1.0:
+        # 100% 完成 - 全绿色实心条
+        bar = "█" * width
+        bar_display = f"🟢[{bar}] {completion_pct}%"
+    else:
+        # 部分完成 - 实心部分 + 空心部分
+        filled = "█" * filled_length if filled_length > 0 else ""
+        empty = "░" * empty_length if empty_length > 0 else ""
+        bar_display = f"🟡[{filled}{empty}] {completion_pct}%"
+    
+    return bar_display
 
 
 def _stub_ratio_to_color(ratio: float) -> str:

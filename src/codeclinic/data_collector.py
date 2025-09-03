@@ -219,8 +219,18 @@ def _analyze_node_content(node: NodeInfo, count_private: bool) -> None:
     visitor = _FunctionVisitor(node.name, count_private)
     visitor.visit(tree)
     
+    # 设置函数的file_path
+    for func in visitor.functions:
+        func.file_path = node.file_path
+    for methods in visitor.classes.values():
+        for method in methods:
+            method.file_path = node.file_path
+    
     node.functions = visitor.functions
     node.classes = visitor.classes
+    
+    # 强制重新计算统计信息
+    node.__post_init__()
 
 
 def _analyze_node_imports(node: NodeInfo, all_nodes: Dict[str, NodeInfo]) -> None:
@@ -262,10 +272,33 @@ def _resolve_import(import_name: str, all_nodes: Dict[str, NodeInfo]) -> Optiona
     if import_name in all_nodes:
         return import_name
     
+    # 处理绝对导入（如 example_project.common -> common）
+    parts = import_name.split('.')
+    if len(parts) > 1:
+        # 尝试移除第一个部分（项目名）
+        relative_name = '.'.join(parts[1:])
+        if relative_name in all_nodes:
+            return relative_name
+        
+        # 尝试移除更多前缀部分
+        for i in range(2, len(parts)):
+            candidate = '.'.join(parts[i:])
+            if candidate in all_nodes:
+                return candidate
+    
     # 寻找部分匹配
     for node_name in all_nodes:
         if node_name.startswith(import_name + '.') or node_name.endswith('.' + import_name):
             return node_name
+        
+        # 检查是否为相同的后缀（如 example_project.A.A1.A12 匹配 A.A1.A12）
+        if import_name.endswith('.' + node_name) or node_name.endswith('.' + import_name.split('.')[-1]):
+            # 更精确的后缀匹配
+            import_parts = import_name.split('.')
+            node_parts = node_name.split('.')
+            if len(import_parts) >= len(node_parts):
+                if import_parts[-len(node_parts):] == node_parts:
+                    return node_name
     
     return None
 
@@ -390,7 +423,9 @@ class _FunctionVisitor(ast.NodeVisitor):
             docstring=self._get_docstring(node),
             line_number=node.lineno,
             is_method=self.current_class is not None,
-            class_name=self.current_class
+            class_name=self.current_class,
+            module_name=self.module_name,
+            file_path=""  # 文件路径后续设置
         )
         
         if self.current_class:

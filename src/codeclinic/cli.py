@@ -270,33 +270,47 @@ def _print_project_summary(project_data, root: str) -> None:
             adj[s].add(d)
         print(f"\n📈 导入关系图:")
         for src in sorted(list(adj.keys())[:10]):  # 最多显示10个
-            targets = ", ".join(sorted(list(adj[src])[:3]))  # 每个最多显示3个目标
+            src_display = _get_display_name(src)
+            target_names = [_get_display_name(t) for t in sorted(list(adj[src])[:3])]
+            targets = ", ".join(target_names)  # 每个最多显示3个目标
             if len(adj[src]) > 3:
                 targets += f" (+{len(adj[src])-3} more)"
-            print(f"  {src} -> {targets}")
+            print(f"  {src_display} -> {targets}")
         if len(adj) > 10:
             print(f"  ... (+{len(adj)-10} more nodes)")
+
+
+def _get_display_name(full_name: str) -> str:
+    """获取用于显示的简化名称（只显示最后一级）"""
+    if not full_name:
+        return "root"
+    return full_name.split('.')[-1]
 
 
 def _print_final_summary(violations_data, stub_data, output_dir: Path) -> None:
     """打印最终分析摘要"""
     print(f"\n📋 === 分析完成 ===")
     
-    # 违规摘要
-    total_violations = violations_data["summary"]["total_violations"]
-    compliance_rate = violations_data["compliance_rate"]
-    print(f"🚨 导入合规性: {total_violations} 个违规, 合规率 {compliance_rate:.1%}")
+    # 违规摘要 - 从violations计算
+    total_violations = len(violations_data["violations"])
+    
+    # 按类型统计违规
+    violations_by_type = {}
+    for v in violations_data["violations"]:
+        vtype = v.violation_type  # ImportViolation对象的属性
+        violations_by_type[vtype] = violations_by_type.get(vtype, 0) + 1
+    
+    # 计算合规率需要获取总边数，这里简化处理
+    print(f"🚨 导入合规性: {total_violations} 个违规")
     
     if total_violations > 0:
-        by_type = violations_data["summary"]["by_type"]
-        for vtype, count in by_type.items():
+        for vtype, count in violations_by_type.items():
             print(f"   - {vtype}: {count} 个")
     
-    # Stub摘要
-    global_stub_ratio = stub_data["summary"]["global_stub_ratio"]
-    total_stubs = stub_data["summary"]["total_stubs"]
-    total_functions = stub_data["summary"]["total_functions"]
-    print(f"🚧 实现完整度: {total_stubs}/{total_functions} 为stub ({global_stub_ratio:.1%})")
+    # Stub摘要 - 从stub_functions计算
+    total_stubs = len(stub_data["stub_functions"])
+    # 从stub_functions统计总函数数（这里简化处理）
+    print(f"🚧 实现完整度: {total_stubs} 个stub函数")
     
     # 输出文件摘要
     print(f"\n📁 输出文件:")

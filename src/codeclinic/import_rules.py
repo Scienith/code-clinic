@@ -79,8 +79,15 @@ class ImportRuleChecker:
     def _is_in_whitelist(self, module_name: str) -> bool:
         """检查模块是否在白名单中"""
         for pattern in self.rules.white_list:
+            # 完整匹配
             if fnmatch.fnmatch(module_name, pattern) or module_name == pattern:
                 return True
+            
+            # 支持简化名称匹配（只匹配最后一级）
+            module_parts = module_name.split('.')
+            if module_parts[-1] == pattern:
+                return True
+                
         return False
     
     def _check_cross_package_violation(self, from_node: NodeInfo, to_node: NodeInfo) -> Optional[ImportViolation]:
