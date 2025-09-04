@@ -19,16 +19,22 @@ def analyze_violations(project_data: ProjectData) -> Dict[str, Any]:
         project_data: 项目数据
         
     Returns:
-        Dict: 违规分析结果 - 只包含violations
+        Dict: 违规分析结果 - 包含violations, legal_edges, violation_edges
     """
     print("开始分析导入违规...")
     
     # 检查违规
     violations = check_import_violations(project_data)
     
-    # 分析结果 - 只保留violations
+    # 分类边
+    from .import_rules import categorize_edges
+    legal_edges, violation_edges = categorize_edges(project_data, violations)
+    
+    # 分析结果 - 包含所有需要的数据
     result = {
-        "violations": violations
+        "violations": violations,
+        "legal_edges": legal_edges,
+        "violation_edges": violation_edges
     }
     
     compliance_rate = 1 - (len(violations) / max(1, len(project_data.import_edges)))
