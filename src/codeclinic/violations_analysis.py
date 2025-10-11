@@ -215,7 +215,8 @@ def _generate_violations_graph(
             project_data.nodes,
             violations_data["legal_edges"],
             violations_data["violation_edges"],
-            str(svg_path.with_suffix(''))  # 不带扩展名
+            str(svg_path.with_suffix('')),
+            child_edges=project_data.child_edges,
         )
         
         return svg_path

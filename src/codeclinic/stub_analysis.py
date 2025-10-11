@@ -324,11 +324,41 @@ def _generate_stub_heatmap(
         
         svg_path = output_dir / "stub_heatmap.svg"
         
+        # Try to overlay per-module test status and pass counts if available
+        test_status = None
+        test_pass_counts = None
+        # component_tests.json is saved in artifacts root; output_dir here is stub_completeness dir
+        candidates = [output_dir / "component_tests.json", output_dir.parent / "component_tests.json"]
+        comp_json = next((p for p in candidates if p.exists()), None)
+        if comp_json:
+            try:
+                with comp_json.open('r', encoding='utf-8') as f:
+                    comp_data = json.load(f)
+                comp_list = comp_data.get("components", [])
+                test_status = {}
+                test_pass_counts = {}
+                for c in comp_list:
+                    name = c.get("name")
+                    if name not in project_data.modules:
+                        continue
+                    total = int(c.get("tests_total", 0) or 0)
+                    failed = int(c.get("tests_failed", 0) or 0)
+                    skipped = int(c.get("tests_skipped", 0) or 0)
+                    passed = max(0, total - failed)  # 不把 skipped 计为通过
+                    status = "green" if total > 0 and failed == 0 else "red"
+                    test_status[name] = status
+                    test_pass_counts[name] = (passed, total)
+            except Exception:
+                test_status = None
+                test_pass_counts = None
+
         render_stub_heatmap(
             project_data.nodes,
             project_data.import_edges,
             project_data.child_edges,
-            str(svg_path.with_suffix(''))  # 不带扩展名
+            str(svg_path.with_suffix('')),
+            test_status=test_status,
+            test_pass_counts=test_pass_counts,
         )
         
         return svg_path

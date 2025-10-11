@@ -10,6 +10,64 @@ pip install -e .
 ```
 > **Note:** Rendering SVG/PNG requires the Graphviz **system** tool (`dot`) in your PATH. macOS: `brew install graphviz`; Ubuntu: `sudo apt-get install graphviz`.
 
+## QA Facade (one-stop quality gates)
+CodeClinic ships with a QA facade that unifies formatting, linting, type checks, tests/coverage, complexity, and internal import/stub analysis behind a single command.
+
+Commands
+- Initialize config and optional scaffolding:
+  - `codeclinic qa init [--pre-commit --github-actions --makefile]`
+- Run checks (no auto-fix):
+  - `codeclinic qa run`
+- Auto-fix format/lint issues only:
+  - `codeclinic qa fix`
+
+Outputs (default `build/codeclinic/`)
+- `summary.json` (overall status, failed gates, key metrics)
+- `logs/*.log` (black/ruff/mypy/pytest/complexity)
+- `artifacts/`:
+  - `coverage.xml`
+  - `complexity.json`, `report.html`
+  - `import_violations/violations.json`
+  - `stub_completeness/stub_summary.json`
+
+Gates (configurable in `codeclinic.yaml`)
+- `formatter_clean`, `linter_errors_max`, `mypy_errors_max`, `coverage_min`, `max_file_loc`, `import_violations_max`, `stub_ratio_max`
+- Optional complexity gates (radon-based): `cc_max_rank_max` (A–F) and `mi_min` (0–100)
+
+All QA provider tools (black, ruff, mypy, pytest, coverage, radon, pyyaml) are installed with CodeClinic and expected to be present.
+
+### Detect Long Files (LOC gate)
+- Set threshold in `codeclinic.yaml`:
+  ```yaml
+  gates:
+    max_file_loc: 500
+    # Optional complexity gates:
+    # cc_max_rank_max: "C"
+    # mi_min: 70
+  ```
+- Run QA: `codeclinic qa run`
+- Inspect results:
+  - Over-limit files: `build/codeclinic/artifacts/complexity.json` → `summary.files_over_limit`
+  - Quick print (no jq required):
+    ```bash
+    python3 - <<'PY'
+    import json
+    p='build/codeclinic/artifacts/complexity.json'
+    d=json.load(open(p))
+    print('\n'.join(d['summary'].get('files_over_limit', [])))
+    PY
+    ```
+  - With LOC values:
+    ```bash
+    python3 - <<'PY'
+    import json
+    d=json.load(open('build/codeclinic/artifacts/complexity.json'))
+    for f in d['files']:
+        if isinstance(f.get('loc'), int) and f['loc']>500:
+            print(f["path"], f["loc"])  # adjust 500 if needed
+    PY
+    ```
+
 ## Quick start
 ```bash
 codeclinic --path ./src --out results

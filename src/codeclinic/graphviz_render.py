@@ -84,11 +84,12 @@ def render_graph(modules: Modules, edges: GraphEdges, child_edges: ChildEdges, o
 
 
 def render_violations_graph(
-    nodes: Dict[str, NodeInfo], 
-    legal_edges: Set[Tuple[str, str]], 
-    violation_edges: Set[Tuple[str, str]], 
-    output_base: str, 
-    fmt: str = "svg"
+    nodes: Dict[str, NodeInfo],
+    legal_edges: Set[Tuple[str, str]],
+    violation_edges: Set[Tuple[str, str]],
+    output_base: str,
+    fmt: str = "svg",
+    child_edges: Set[Tuple[str, str]] | None = None,
 ) -> Tuple[str, str]:
     """
     渲染违规检测图，用红色表示违规边，绿色表示合法边
@@ -100,22 +101,12 @@ def render_violations_graph(
         edge_attr={"arrowhead": "vee"},
     )
 
-    # 添加节点，根据节点类型使用不同样式
+    # 添加节点（统一样式：shape=box, style=rounded,filled, 填充统一白色）
     for name, node in nodes.items():
         display_name = _get_short_name(name)
-        
-        # 根据节点类型设置样式
-        if node.node_type == NodeType.PACKAGE:
-            node_color = "#E3F2FD"  # 浅蓝色
-            shape = "box"
-            style = "bold,filled"
-        else:  # MODULE
-            node_color = "#F3E5F5"  # 浅紫色
-            shape = "box"
-            style = "rounded,filled"
-        
-        label = f"{display_name}\n{node.node_type.value}"
-        dot.node(name, label=label, fillcolor=node_color, shape=shape, style=style)
+        icon = "\U0001F4E6" if node.node_type == NodeType.PACKAGE else "\U0001F4C4"  # 📦 or 📄
+        label = f"{icon} {display_name}\n{node.node_type.value}"
+        dot.node(name, label=label, fillcolor="#FFFFFF", shape="box", style="rounded,filled")
 
     # 添加合法边（绿色）
     for src, dst in sorted(legal_edges):
@@ -126,6 +117,12 @@ def render_violations_graph(
     for src, dst in sorted(violation_edges):
         if src in nodes and dst in nodes:
             dot.edge(src, dst, color="#F44336", style="solid", penwidth="3")
+
+    # 可选：添加包含关系（虚线灰色），仅用于结构辅助，不代表导入
+    if child_edges:
+        for parent, child in sorted(child_edges):
+            if parent in nodes and child in nodes and (parent, child) not in legal_edges and (parent, child) not in violation_edges:
+                dot.edge(parent, child, color="#DDDDDD", style="dashed", penwidth="1")
 
     dot_path = f"{output_base}.dot"
     svg_path = f"{output_base}.{fmt}"
@@ -140,11 +137,13 @@ def render_violations_graph(
 
 
 def render_stub_heatmap(
-    nodes: Dict[str, NodeInfo], 
-    edges: GraphEdges, 
-    child_edges: ChildEdges, 
-    output_base: str, 
-    fmt: str = "svg"
+    nodes: Dict[str, NodeInfo],
+    edges: GraphEdges,
+    child_edges: ChildEdges,
+    output_base: str,
+    fmt: str = "svg",
+    test_status: Dict[str, str] | None = None,
+    test_pass_counts: Dict[str, Tuple[int, int]] | None = None,
 ) -> Tuple[str, str]:
     """
     渲染Stub热力图，节点颜色从白色（0% stub）到红色（100% stub）渐变
@@ -156,28 +155,40 @@ def render_stub_heatmap(
         edge_attr={"arrowhead": "vee", "color": "#999999"},
     )
 
-    # 添加节点，使用stub比例决定颜色
+    # 添加节点，使用统一样式，边框可叠加测试通过/失败状态
     for name, node in nodes.items():
         display_name = _get_short_name(name)
         ratio = node.stub_ratio
         pct = int(round(ratio * 100))
         
-        # 使用统一的白色背景，不需要颜色渐变
+        # 使用统一的白色背景
         color = "#FFFFFF"
+        border_color = None
+        if test_status is not None and node.node_type == NodeType.MODULE:
+            status = test_status.get(name)
+            if status == "green":
+                border_color = "#2e7d32"  # green
+            else:
+                border_color = "#c62828"  # red
         
-        # 根据节点类型调整显示
-        if node.node_type == NodeType.PACKAGE:
-            shape = "box"
-            style = "bold,filled"
-            type_indicator = "📦"  # package emoji
-        else:  # MODULE
-            shape = "box"
-            style = "rounded,filled"
-            type_indicator = "📄"  # file emoji
+        # 统一节点形状与样式；保留类型图标以便识别
+        shape = "box"
+        style = "rounded,filled"
+        type_indicator = "📦" if node.node_type == NodeType.PACKAGE else "📄"
         
         # 创建进度条使用HTML表格渐变
         progress_bar = _create_html_progress_bar(ratio)
-        
+
+        # Tests pass/total line for modules (do not change fillcolor)
+        tests_line = ""
+        if node.node_type == NodeType.MODULE and test_pass_counts is not None:
+            passed, total = test_pass_counts.get(name, (None, None)) if test_pass_counts else (None, None)
+            if isinstance(passed, int) and isinstance(total, int):
+                test_color = "#2e7d32" if total > 0 and passed == total else "#c62828"
+                if total == 0:
+                    test_color = "#c62828"
+                tests_line = f"<TR><TD>Tests: <FONT COLOR=\"{test_color}\">{passed}/{total}</FONT></TD></TR>"
+
         # 计算实现比例（非stub）
         implemented = node.functions_public - node.stubs
         implemented_pct = int(round((1.0 - ratio) * 100))
@@ -187,11 +198,16 @@ def render_stub_heatmap(
         <TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0">
             <TR><TD>{type_indicator} {display_name}</TD></TR>
             <TR><TD>{implemented}/{node.functions_public} ({implemented_pct}%)</TD></TR>
+            {tests_line}
             <TR><TD>{progress_bar}</TD></TR>
         </TABLE>
         >'''
         
-        dot.node(name, label=label, fillcolor=color, shape=shape, style=style)
+        attrs = {"label": label, "fillcolor": color, "shape": shape, "style": style}
+        if border_color:
+            attrs["color"] = border_color
+            attrs["penwidth"] = "2"
+        dot.node(name, **attrs)
 
     # 添加边（较淡的颜色，不干扰热力图）
     for src, dst in sorted(edges):

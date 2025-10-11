@@ -19,7 +19,11 @@ Simple API for analyzing Python projects:
         pass
 """
 
-from .api import analyze_project
+def analyze_project(*args, **kwargs):
+    """Lazy import wrapper for analyze_project to avoid heavy imports at package import time."""
+    from .api import analyze_project as _analyze_project
+    return _analyze_project(*args, **kwargs)
+
 from .stub import stub
 
 try:

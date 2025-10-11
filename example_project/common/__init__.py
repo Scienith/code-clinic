@@ -3,6 +3,7 @@
 This package contains common utilities used across the project.
 It provides base classes, configuration, and shared functionality.
 """
+from codeclinic import stub
 
 def get_base_config():
     """Get base configuration settings."""

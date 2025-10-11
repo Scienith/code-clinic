@@ -13,6 +13,14 @@ requires-python = ">=3.8"
 dependencies = [
   "graphviz>=0.20.1",
   "tomli>=2.0.1; python_version < '3.11'",
+  # QA providers (required)
+  "black>=23.0.0",
+  "ruff>=0.4.0",
+  "mypy>=1.0.0",
+  "pytest>=7.0.0",
+  "coverage>=7.0.0",
+  "radon>=6.0.0",
+  "pyyaml>=6.0.0",
 ]
 keywords = ["import", "dependency", "analysis", "graphviz", "metrics", "stub", "visualization", "ast"]
 classifiers = [

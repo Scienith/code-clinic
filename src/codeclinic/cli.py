@@ -3,7 +3,6 @@
 CodeClinic CLI tool - Python project dependency and stub analysis
 
 This is the main entry point for the CodeClinic CLI tool.
-It imports and uses the core library from src/codeclinic.
 """
 
 import sys
@@ -14,22 +13,18 @@ from pathlib import Path
 from collections import defaultdict
 from typing import Dict, Tuple
 
-# 新版导入
-from codeclinic.data_collector import collect_project_data
-from codeclinic.config_loader import load_config, ExtendedConfig
-from codeclinic.violations_analysis import analyze_violations, save_violations_report
-from codeclinic.stub_analysis import analyze_stub_completeness, save_stub_report
-from codeclinic.graphviz_render import render_graph
-
-# 保持向后兼容的导入
-from codeclinic.ast_scanner import scan_project_ast as scan_project
-from codeclinic.config import Config
-from codeclinic.types import ModuleStats, Modules, GraphEdges
-from codeclinic.json_output import save_json_output
-from codeclinic.stub_report import save_stub_report as save_legacy_stub_report
-
 
 def main() -> None:
+    # Lightweight dispatcher to a dedicated QA sub-CLI to preserve backward compatibility
+    if len(sys.argv) > 1 and sys.argv[1] == "qa":
+        try:
+            from .qa_cli import qa_cli_main
+        except Exception as e:
+            print(f"❌ 无法加载QA子命令: {e}")
+            sys.exit(2)
+        # Delegate remaining args (after 'qa')
+        qa_cli_main(sys.argv[2:])
+        return
     parser = argparse.ArgumentParser(
         prog="codeclinic",
         description="Diagnose your Python project: import graph + stub metrics + import rules compliance",
@@ -78,11 +73,13 @@ def main() -> None:
     
     # 1. 加载配置
     try:
+        from codeclinic.config_loader import load_config, ExtendedConfig  # lazy import
         config = load_config()
         white_list_count = len(config.import_rules.white_list) if config.import_rules.white_list else 0
         print(f"已加载配置: {white_list_count} 个白名单项")
     except Exception as e:
         print(f"警告: 配置加载失败，使用默认配置: {e}")
+        from codeclinic.config_loader import ExtendedConfig  # lazy import fallback
         config = ExtendedConfig()
     
     # 2. 合并命令行参数
@@ -101,6 +98,7 @@ def main() -> None:
     print(f"📁 输出目录: {config.output}")
     
     # 3. 收集项目数据
+    from codeclinic.data_collector import collect_project_data  # lazy import
     project_data = collect_project_data(
         paths=config.paths,
         include=config.include,
@@ -136,10 +134,12 @@ def main() -> None:
     print(f"\n🔬 开始专项分析...")
     
     # 7.1 导入违规分析
+    from codeclinic.violations_analysis import analyze_violations, save_violations_report  # lazy import
     violations_data = analyze_violations(project_data)
     violations_json = save_violations_report(violations_data, project_data, output_dir)
     
     # 7.2 Stub完整度分析
+    from codeclinic.stub_analysis import analyze_stub_completeness, save_stub_report  # lazy import
     stub_data = analyze_stub_completeness(project_data)
     stub_json = save_stub_report(stub_data, project_data, output_dir)
     
@@ -353,6 +353,7 @@ def _run_legacy_analysis(args):
     print("🔄 使用传统分析模式...")
     
     # 加载旧版配置
+    from codeclinic.config import Config  # lazy import
     cfg = Config.from_files(os.getcwd())
     cfg.paths = [args.path] if args.path else cfg.paths
     if args.out:
@@ -364,6 +365,7 @@ def _run_legacy_analysis(args):
     if args.count_private:
         cfg.count_private = True
 
+    from codeclinic.ast_scanner import scan_project_ast as scan_project  # lazy import
     modules, edges, child_edges, stub_functions = scan_project(cfg.paths, cfg.include, cfg.exclude, cfg.count_private)
 
     if cfg.aggregate == "package":
@@ -390,6 +392,7 @@ def _run_legacy_analysis(args):
 
     # Always generate visualization
     graph_base = output_dir / "dependency_graph"
+    from codeclinic.graphviz_render import render_graph  # lazy import
     dot_path, viz_path = render_graph(modules, edges, child_edges, str(graph_base), cfg.format)
     print(f"✓ DOT file saved to: {dot_path}")
     if viz_path:
