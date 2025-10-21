@@ -116,6 +116,26 @@ def qa_run(config_path: str = "codeclinic.yaml", output_override: Optional[str] 
         "status": "passed" if comp_summary.get("gate_failed_count", 0) == 0 else "failed",
     }
 
+    # Extensions: function metrics, stub doc contracts, exports
+    fn_over_count, fn_report = _ext_function_metrics(cfg, artifacts_dir)
+    stub_missing_count, docs_report = _ext_doc_contracts(cfg, artifacts_dir)
+    private_exports_count, exports_report = _ext_exports(cfg, artifacts_dir)
+    results.setdefault("metrics", {})["function_metrics_ext"] = {
+        "violations": fn_over_count,
+        "report": str(fn_report) if fn_report else None,
+        "status": "passed" if fn_over_count == 0 else "failed",
+    }
+    results["metrics"]["doc_contracts_ext"] = {
+        "stub_doc_missing": stub_missing_count,
+        "report": str(docs_report) if docs_report else None,
+        "status": "passed" if stub_missing_count == 0 else "failed",
+    }
+    results["metrics"]["exports_ext"] = {
+        "private_exports": private_exports_count,
+        "report": str(exports_report) if exports_report else None,
+        "status": "passed" if private_exports_count == 0 else "failed",
+    }
+
     # Gates evaluation
     gates_failed: List[str] = []
     g = cfg.gates
@@ -189,6 +209,18 @@ def qa_run(config_path: str = "codeclinic.yaml", output_override: Optional[str] 
         if missing_tests:
             gates_failed.append("modules_require_named_tests")
 
+    # Extension gates
+    try:
+        thr = int(getattr(g, 'doc_contracts_missing_max', 0) or 0)
+        if stub_missing_count > thr:
+            gates_failed.append('doc_contracts_missing_max')
+    except Exception: pass
+    if any((getattr(g, 'fn_loc_max', 0), getattr(g, 'fn_args_max', 0), getattr(g, 'fn_nesting_max', 0))):
+        if fn_over_count > 0:
+            gates_failed.append('function_metrics_over_threshold')
+    if bool(getattr(g, 'exports_no_private', False)) and private_exports_count > 0:
+        gates_failed.append('exports_no_private')
+
     results["gates_failed"] = gates_failed
     results["status"] = "passed" if not gates_failed else "failed"
 
@@ -249,6 +281,23 @@ def _run_ruff_check(cfg: QAConfig, logs_dir: Path) -> Tuple[str, str, Optional[i
         for r in cfg.tools.linter.ruleset:
             args += ["--select", r]
     args += [f"--line-length={cfg.tools.linter.line_length}"]
+    # Optional: docstring convention via a temporary ruff config
+    try:
+        conv = getattr(cfg.tools.linter, 'docstyle_convention', None)
+        if conv:
+            tmp_cfg = logs_dir / "ruff_docstyle.toml"
+            tmp_cfg.write_text(
+                """
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.pydocstyle]
+convention = """.strip() + conv + "\n",
+                encoding="utf-8",
+            )
+            args += ["--config", str(tmp_cfg)]
+    except Exception:
+        pass
     code, out = _call(args)
     log_path.write_text(out, encoding="utf-8")
     errors = _count_ruff_issues(out) if code != 0 else 0
@@ -959,6 +1008,145 @@ repos:
 """.lstrip()
     p.write_text(content, encoding="utf-8")
     return p
+
+
+# -------- extensions: function metrics / doc contracts / exports ---------
+
+import ast as _ast_ext
+from typing import Any as _Any
+
+
+def _ext_collect_files(cfg: QAConfig) -> list[str]:
+    return _collect_py_files(cfg.tool.paths, cfg.tool.include, cfg.tool.exclude)
+
+
+def _ext_is_public(name: str) -> bool:
+    return not name.startswith('_') and name != '__init__'
+
+
+def _ext_max_nesting(node: _ast_ext.AST) -> int:
+    blockers = (_ast_ext.If, _ast_ext.For, _ast_ext.AsyncFor, _ast_ext.While, _ast_ext.With, _ast_ext.AsyncWith, _ast_ext.Try, _ast_ext.IfExp)
+    def _d(n: _ast_ext.AST, cur: int = 0) -> int:
+        if isinstance(n, blockers):
+            cur += 1
+        m = cur
+        for c in _ast_ext.iter_child_nodes(n):
+            m = max(m, _d(c, cur))
+        return m
+    md = 0
+    for st in getattr(node, 'body', []):
+        md = max(md, _d(st, 0))
+    return md
+
+
+def _ext_function_metrics(cfg: QAConfig, artifacts_dir: Path) -> tuple[int, Path]:
+    files = _ext_collect_files(cfg)
+    gates = cfg.gates
+    loc_thr = int(getattr(gates, 'fn_loc_max', 0) or 0)
+    args_thr = int(getattr(gates, 'fn_args_max', 0) or 0)
+    nest_thr = int(getattr(gates, 'fn_nesting_max', 0) or 0)
+    violations: list[dict[str, _Any]] = []
+    per_file: list[dict[str, _Any]] = []
+    for f in files:
+        try:
+            src = Path(f).read_text(encoding='utf-8')
+            tree = _ast_ext.parse(src)
+        except Exception:
+            continue
+        funs: list[dict[str, _Any]] = []
+        for node in [n for n in _ast_ext.walk(tree) if isinstance(n, (_ast_ext.FunctionDef, _ast_ext.AsyncFunctionDef))]:
+            name = getattr(node, 'name', '')
+            if not _ext_is_public(name):
+                continue
+            try:
+                loc = (node.end_lineno or node.lineno) - node.lineno + 1
+            except Exception:
+                loc = None
+            args_cnt = len(getattr(node, 'args', None).args or []) + len(getattr(node, 'args', None).kwonlyargs or [])
+            nesting = _ext_max_nesting(node)
+            funs.append({'name': name, 'lineno': node.lineno, 'loc': loc, 'args': args_cnt, 'nesting': nesting})
+            viol = {'file': f, 'name': name, 'lineno': node.lineno}
+            tagged = False
+            if loc_thr and isinstance(loc, int) and loc > loc_thr:
+                viol['loc'] = loc; tagged = True
+            if args_thr and args_cnt > args_thr:
+                viol['args'] = args_cnt; tagged = True
+            if nest_thr and nesting > nest_thr:
+                viol['nesting'] = nesting; tagged = True
+            if tagged:
+                violations.append(viol)
+        per_file.append({'file': f, 'functions': funs})
+    report = artifacts_dir / 'function_metrics.json'
+    report.write_text(json.dumps({'violations': violations, 'files': per_file}, ensure_ascii=False, indent=2), encoding='utf-8')
+    return len(violations), report
+
+
+def _ext_doc_contracts(cfg: QAConfig, artifacts_dir: Path) -> tuple[int, Path]:
+    files = _ext_collect_files(cfg)
+    stub_decorators = set(getattr(cfg.tools.stubs, 'decorator_names', ['stub']))
+    missing: list[dict[str, _Any]] = []
+    for f in files:
+        try:
+            src = Path(f).read_text(encoding='utf-8')
+            tree = _ast_ext.parse(src)
+        except Exception:
+            continue
+        file_missing: list[dict[str, _Any]] = []
+        for node in [n for n in _ast_ext.walk(tree) if isinstance(n, (_ast_ext.FunctionDef, _ast_ext.AsyncFunctionDef))]:
+            # detect stub by decorator names
+            decos = []
+            for d in getattr(node, 'decorator_list', []) or []:
+                if isinstance(d, _ast_ext.Name): decos.append(d.id)
+                elif isinstance(d, _ast_ext.Attribute): decos.append(d.attr)
+            if not any(d in stub_decorators for d in decos):
+                continue
+            doc = _ast_ext.get_docstring(node) or ''
+            # 强制要求五要素：功能概述/前置条件/后置条件/不变量/副作用
+            required = ['功能概述', '前置条件', '后置条件', '不变量', '副作用']
+            if not doc.strip():
+                file_missing.append({'name': node.name, 'lineno': node.lineno, 'reason': 'no_doc'})
+            else:
+                if not all(kw in doc for kw in required):
+                    file_missing.append({'name': node.name, 'lineno': node.lineno, 'reason': 'missing_sections', 'required': required})
+        if file_missing:
+            missing.append({'file': f, 'missing': file_missing})
+    report = artifacts_dir / 'doc_contracts.json'
+    report.write_text(json.dumps({'stub_missing': missing}, ensure_ascii=False, indent=2), encoding='utf-8')
+    total_missing = sum(len(item.get('missing', [])) for item in missing)
+    return total_missing, report
+
+
+def _ext_exports(cfg: QAConfig, artifacts_dir: Path) -> tuple[int, Path]:
+    paths = cfg.tool.paths
+    priv_list: list[dict[str, _Any]] = []
+    for root in paths:
+        base = Path(root)
+        if not base.exists():
+            continue
+        for dirpath, dirnames, filenames in os.walk(base):
+            if '__init__.py' in filenames:
+                initp = Path(dirpath) / '__init__.py'
+                try:
+                    tree = _ast_ext.parse(initp.read_text(encoding='utf-8'))
+                except Exception:
+                    continue
+                priv: list[str] = []
+                for node in tree.body:
+                    if isinstance(node, _ast_ext.Assign):
+                        for target in node.targets:
+                            if isinstance(target, _ast_ext.Name) and target.id == '__all__':
+                                if isinstance(node.value, (_ast_ext.List, _ast_ext.Tuple)):
+                                    for elt in node.value.elts:
+                                        if isinstance(elt, _ast_ext.Str):
+                                            name = elt.s
+                                            if name.startswith('_'):
+                                                priv.append(name)
+                if priv:
+                    priv_list.append({'package_init': str(initp), 'private_exports': priv})
+    report = artifacts_dir / 'exports.json'
+    report.write_text(json.dumps({'private_exports': priv_list}, ensure_ascii=False, indent=2), encoding='utf-8')
+    count = sum(len(item.get('private_exports', [])) for item in priv_list)
+    return count, report
 
 
 def _write_github_actions() -> Path:

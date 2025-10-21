@@ -29,6 +29,14 @@ class ImportRulesConfig:
     allow_cross_package: bool = False
     allow_upward_import: bool = False
     allow_skip_levels: bool = False
+    # 新增：禁止私有模块导入（路径段以下划线开头）
+    forbid_private_modules: bool = False
+    # 新增：要求跨包导入必须通过聚合门面（PACKAGE/__init__.py）
+    require_via_aggregator: bool = False
+    # 允许外部导入的聚合门面最大子层级深度（0=仅顶层包，1=允许一级子包的 __init__，依此类推）
+    allowed_external_depth: int = 0
+    # 聚合门面白名单（允许直连的门面模块前缀或完整名）
+    aggregator_whitelist: List[str] = field(default_factory=list)
 
 
 @dataclass 
@@ -200,6 +208,8 @@ def _parse_config_data(data: Dict[str, Any]) -> ExtendedConfig:
         
         if 'white_list' in rules_data:
             import_rules.white_list = rules_data['white_list']
+        if 'aggregator_whitelist' in rules_data:
+            import_rules.aggregator_whitelist = rules_data['aggregator_whitelist']
         
         # 规则开关
         if 'rules' in rules_data:
@@ -210,6 +220,15 @@ def _parse_config_data(data: Dict[str, Any]) -> ExtendedConfig:
                 import_rules.allow_upward_import = rule_switches['allow_upward_import']
             if 'allow_skip_levels' in rule_switches:
                 import_rules.allow_skip_levels = rule_switches['allow_skip_levels']
+            if 'forbid_private_modules' in rule_switches:
+                import_rules.forbid_private_modules = rule_switches['forbid_private_modules']
+            if 'require_via_aggregator' in rule_switches:
+                import_rules.require_via_aggregator = rule_switches['require_via_aggregator']
+            if 'allowed_external_depth' in rule_switches:
+                try:
+                    import_rules.allowed_external_depth = int(rule_switches['allowed_external_depth'])
+                except Exception:
+                    import_rules.allowed_external_depth = 0
         
         # 支持旧版格式（直接在import_rules下）
         if 'allow_cross_package' in rules_data:
@@ -218,6 +237,17 @@ def _parse_config_data(data: Dict[str, Any]) -> ExtendedConfig:
             import_rules.allow_upward_import = rules_data['allow_upward_import']
         if 'allow_skip_levels' in rules_data:
             import_rules.allow_skip_levels = rules_data['allow_skip_levels']
+        if 'forbid_private_modules' in rules_data:
+            import_rules.forbid_private_modules = rules_data['forbid_private_modules']
+        if 'require_via_aggregator' in rules_data:
+            import_rules.require_via_aggregator = rules_data['require_via_aggregator']
+        if 'allowed_external_depth' in rules_data:
+            try:
+                import_rules.allowed_external_depth = int(rules_data['allowed_external_depth'])
+            except Exception:
+                import_rules.allowed_external_depth = 0
+        if 'aggregator_whitelist' in rules_data:
+            import_rules.aggregator_whitelist = rules_data['aggregator_whitelist']
         
         config.import_rules = import_rules
     
@@ -254,12 +284,18 @@ import_rules:
     - "myproject.types"      # 类型定义
     - "myproject.utils"      # 工具函数
     - "myproject.constants"  # 常量定义
+  # 聚合门面白名单（可选）：允许直连这些聚合门面
+  aggregator_whitelist:
+    - "myproject.api"
     
   # 规则开关
   rules:
     allow_cross_package: false    # 禁止跨包导入
     allow_upward_import: false    # 禁止子模块导入父模块
     allow_skip_levels: false      # 禁止跳级导入
+    forbid_private_modules: true  # 禁止导入路径包含私有段（以_开头）
+    require_via_aggregator: false # 若允许跨包导入，则要求目标为聚合门面（PACKAGE/__init__.py）
+    allowed_external_depth: 0     # 仅允许顶层包作为门面（0）；>0 允许子包作为聚合门面
 """
 
 
@@ -302,6 +338,8 @@ def _show_default_config_info() -> None:
     print("  ❌ 跨包导入 (禁止)")
     print("  ❌ 向上导入 (禁止)")
     print("  ❌ 跳级导入 (禁止)")
+    print("  ❌ 导入私有模块 (禁止，默认关闭，可开启)")
+    print("  ❌ 跨包必须经聚合门面 (默认关闭，可开启)")
     print("  📝 白名单: 无")
     print()
     print("💡 提示:")

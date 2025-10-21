@@ -55,13 +55,25 @@ class ImportRuleChecker:
         # 1. 检查白名单
         if self._is_in_whitelist(to_node.name):
             return None
-        
+
+        # 1.1 检查私有模块导入（路径段以下划线开头）
+        if getattr(self.rules, 'forbid_private_modules', False):
+            v = self._check_private_module_import(to_node)
+            if v:
+                return v
+
         # 2. 检查跨包导入
         if not self.rules.allow_cross_package:
             violation = self._check_cross_package_violation(from_node, to_node)
             if violation:
                 return violation
-        
+
+        # 2.1 若允许跨包导入但要求经聚合门面
+        if getattr(self.rules, 'allow_cross_package', False) and getattr(self.rules, 'require_via_aggregator', False):
+            v = self._check_require_via_aggregator(from_node, to_node)
+            if v:
+                return v
+
         # 3. 检查向上导入
         if not self.rules.allow_upward_import:
             violation = self._check_upward_import_violation(from_node, to_node)
@@ -74,6 +86,59 @@ class ImportRuleChecker:
             if violation:
                 return violation
         
+        return None
+
+    def _match_any(self, name: str, patterns: List[str]) -> bool:
+        for p in patterns or []:
+            if fnmatch.fnmatch(name, p) or name == p or name.startswith(p + '.'):
+                return True
+        return False
+
+    def _check_private_module_import(self, to_node: NodeInfo) -> Optional[ImportViolation]:
+        """当 forbid_private_modules 启用时，禁止导入路径包含私有段（以下划线开头）。"""
+        # 允许聚合门面白名单豁免
+        if self._match_any(to_node.name, getattr(self.rules, 'aggregator_whitelist', []) or []):
+            return None
+        parts = to_node.name.split('.')
+        if any(part.startswith('_') for part in parts):
+            return ImportViolation(
+                from_node="",
+                to_node=to_node.name,
+                violation_type="private_module_import",
+                message=f"禁止导入私有模块路径段（以下划线开头）: {to_node.name}",
+                severity="error",
+            )
+        return None
+
+    def _check_require_via_aggregator(self, from_node: NodeInfo, to_node: NodeInfo) -> Optional[ImportViolation]:
+        """当 require_via_aggregator 启用且跨包导入时，要求目标为聚合门面（PACKAGE）。
+
+        允许的最大外部深度通过 allowed_external_depth 控制（0=仅顶层包）。
+        可通过 aggregator_whitelist 对特定路径豁免。
+        """
+        # 非跨顶级包则不限制
+        f_top = from_node.name.split('.')[0] if from_node.name else ""
+        t_top = to_node.name.split('.')[0] if to_node.name else ""
+        if not f_top or not t_top or f_top == t_top:
+            return None
+        # 白名单豁免
+        if self._match_any(to_node.name, getattr(self.rules, 'aggregator_whitelist', []) or []):
+            return None
+        # 仅允许导向 PACKAGE，且深度不超过阈值
+        allowed_depth = int(getattr(self.rules, 'allowed_external_depth', 0) or 0)
+        # to_node.package_depth 在 NodeInfo.__post_init__ 中赋值（基于名称中的点数）
+        depth = getattr(to_node, 'package_depth', to_node.name.count('.'))
+        if to_node.node_type != NodeType.PACKAGE or depth > allowed_depth:
+            return ImportViolation(
+                from_node=from_node.name,
+                to_node=to_node.name,
+                violation_type="require_via_aggregator",
+                message=(
+                    f"跨包导入必须经聚合门面（PACKAGE/__init__.py），"
+                    f"且深度≤{allowed_depth}；检测到: {from_node.name} -> {to_node.name}"
+                ),
+                severity="error",
+            )
         return None
     
     def _is_in_whitelist(self, module_name: str) -> bool:

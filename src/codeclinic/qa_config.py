@@ -30,9 +30,11 @@ class FormatterCfg:
 @dataclass
 class LinterCfg:
     provider: str = "ruff"
-    ruleset: List[str] = field(default_factory=lambda: ["E", "F", "I", "B"])  # include I for import order
+    ruleset: List[str] = field(default_factory=lambda: ["E", "F", "I", "B", "D"])  # include I for import order
     line_length: int = 88
     unsafe_fixes: bool = False
+    # Optional: docstring style convention for pydocstyle (e.g., "google", "numpy", "pep257")
+    docstyle_convention: Optional[str] = None
 
 
 @dataclass
@@ -122,6 +124,11 @@ class GatesSection:
     packages_require_dunder_init: bool = True
     # 新增：每个包内模块是否必须有命名规范 tests/test_<module>.py（仅对包内 .py 文件生效）
     modules_require_named_tests: bool = True
+    doc_contracts_missing_max: int = 0
+    fn_loc_max: int = 50
+    fn_args_max: int = 5
+    fn_nesting_max: int = 3
+    exports_no_private: bool = True
 
 
 @dataclass
@@ -154,9 +161,10 @@ tools:
     line_length: 88
   linter:
     provider: ruff
-    ruleset: ["E","F","I","B"]
+    ruleset: ["E","F","I","B","D"]
     line_length: 88
     unsafe_fixes: false
+    # docstyle_convention: "google"   # 可选：启用 Ruff pydocstyle 的风格约定（google/numpy/pep257）
   typecheck:
     provider: mypy
     strict: true
@@ -233,6 +241,7 @@ def load_qa_config(path: str | Path) -> QAConfig:
     cfg.tools.linter.ruleset = list(lin.get("ruleset", cfg.tools.linter.ruleset))
     cfg.tools.linter.line_length = int(lin.get("line_length", cfg.tools.linter.line_length))
     cfg.tools.linter.unsafe_fixes = bool(lin.get("unsafe_fixes", cfg.tools.linter.unsafe_fixes))
+    cfg.tools.linter.docstyle_convention = lin.get("docstyle_convention", cfg.tools.linter.docstyle_convention)
 
     tc = tools.get("typecheck") or {}
     cfg.tools.typecheck.provider = tc.get("provider", cfg.tools.typecheck.provider)
