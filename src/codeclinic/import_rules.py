@@ -15,6 +15,8 @@ class ImportRuleChecker:
     
     def __init__(self, rules: ImportRulesConfig):
         self.rules = rules
+        # 当前项目节点表（在 check_violations 时注入）
+        self._nodes: Dict[str, NodeInfo] | None = None
     
     def check_violations(self, project_data: ProjectData) -> List[ImportViolation]:
         """
@@ -28,6 +30,9 @@ class ImportRuleChecker:
         """
         violations = []
         
+        # 为 <ancestor> 语义提供节点上下文
+        self._nodes = project_data.nodes
+
         for from_node, to_node in project_data.import_edges:
             from_info = project_data.nodes.get(from_node)
             to_info = project_data.nodes.get(to_node)
@@ -52,53 +57,181 @@ class ImportRuleChecker:
         Returns:
             ImportViolation: 如果违规则返回违规信息，否则返回None
         """
-        # 1. 检查白名单
-        if self._is_in_whitelist(to_node.name):
-            return None
-
-        # 1.1 检查私有模块导入（路径段以下划线开头）
+        # 1) 可选：私有模块导入（路径段以下划线开头）
         if getattr(self.rules, 'forbid_private_modules', False):
             v = self._check_private_module_import(to_node)
             if v:
                 return v
 
-        # 2. 检查跨包导入
-        if not self.rules.allow_cross_package:
-            violation = self._check_cross_package_violation(from_node, to_node)
-            if violation:
-                return violation
+        # 2) 基于矩阵的显式允许/禁止规则（唯一决策来源）
+        matrix_decision = self._check_matrix_rules(from_node.name, to_node.name)
+        if matrix_decision == "deny":
+            return ImportViolation(
+                from_node=from_node.name,
+                to_node=to_node.name,
+                violation_type="pattern_matrix",
+                message=f"导入不在允许矩阵内: {from_node.name} -> {to_node.name}",
+                severity="error",
+            )
+        if matrix_decision == "allow":
+            return None
+        # 3) 未命中时按 matrix_default 决策
+        if str(getattr(self.rules, 'matrix_default', 'deny')).lower() == 'allow':
+            return None
+        return ImportViolation(
+            from_node=from_node.name,
+            to_node=to_node.name,
+            violation_type="pattern_matrix",
+            message=f"导入未命中允许矩阵，默认拒绝: {from_node.name} -> {to_node.name}",
+            severity="error",
+        )
 
-        # 2.1 若允许跨包导入但要求经聚合门面
-        if getattr(self.rules, 'allow_cross_package', False) and getattr(self.rules, 'require_via_aggregator', False):
-            v = self._check_require_via_aggregator(from_node, to_node)
-            if v:
-                return v
+    # ---- 矩阵匹配 ----
+    def _check_matrix_rules(self, src: str, dst: str) -> str:
+        """返回 'allow' | 'deny' | 'none'
+        逻辑：
+          - 私有模块检查不在此处处理（已在上层处理）
+          - 若存在 deny_patterns 且匹配 -> deny（优先级高）
+          - 若存在 allow_patterns 且匹配 -> allow
+          - 若 allow_patterns 非空但均未匹配 -> 按 matrix_default（默认 deny）
+          - 若无任何矩阵规则 -> none
 
-        # 3. 检查向上导入
-        if not self.rules.allow_upward_import:
-            violation = self._check_upward_import_violation(from_node, to_node)
-            if violation:
-                return violation
-        
-        # 4. 检查跳级导入
-        if not self.rules.allow_skip_levels:
-            violation = self._check_skip_level_violation(from_node, to_node)
-            if violation:
-                return violation
-        
-        return None
+        <ancestor> 语义（修订）：表示“导入方 src 的任一严格祖先包（非自身）”。
+        - 替换时生成所有候选祖先（如 apps.projects.api.views -> apps.projects.api, apps.projects, apps）
+        - 仅保留存在于项目节点表的 PACKAGE 祖先
+        - 逐一替换后进行匹配
 
-    def _match_any(self, name: str, patterns: List[str]) -> bool:
-        for p in patterns or []:
-            if fnmatch.fnmatch(name, p) or name == p or name.startswith(p + '.'):
+        支持通配符 * 与 fnmatch 模式。
+        """
+        allow_patterns = getattr(self.rules, 'allow_patterns', []) or []
+        deny_patterns = getattr(self.rules, 'deny_patterns', []) or []
+        matrix_default = str(getattr(self.rules, 'matrix_default', 'deny') or 'deny').lower()
+        schema = getattr(self.rules, 'schema', {}) or {}
+
+        def _ancestors_of(name: str) -> List[str]:
+            parts = name.split('.') if name else []
+            # 严格祖先：排除自身
+            cands = ['.'.join(parts[:i]) for i in range(1, len(parts))]
+            # 仅保留存在的 PACKAGE 节点（如有上下文）
+            nodes = self._nodes or {}
+            out: List[str] = []
+            for a in cands:
+                n = nodes.get(a)
+                if n and n.node_type == NodeType.PACKAGE:
+                    out.append(a)
+            return out
+
+        def _expand(pattern: str) -> List[str]:
+            # 多步展开：<self>、<ancestor>、<global>、<public>
+            pats = [pattern]
+            # 展开 <self>
+            tmp: List[str] = []
+            for p in pats:
+                if '<self>' in p:
+                    tmp.append(p.replace('<self>', src))
+                else:
+                    tmp.append(p)
+            pats = tmp
+            # 展开 <ancestor>
+            tmp = []
+            for p in pats:
+                if '<ancestor>' in p:
+                    for anc in _ancestors_of(src):
+                        tmp.append(p.replace('<ancestor>', anc))
+                else:
+                    tmp.append(p)
+            pats = tmp
+            # 展开 <global>
+            tmp = []
+            gset = list(schema.get('global', [])) or []
+            if not gset:
+                gset = ['utils*', 'types*', 'common*']  # 默认全局集合
+            for p in pats:
+                if '<global>' in p:
+                    for g in gset:
+                        tmp.append(p.replace('<global>', g))
+                else:
+                    tmp.append(p)
+            pats = tmp
+            # 展开 <public>
+            tmp = []
+            pset = list(schema.get('public', [])) or ['*.public.*']
+            for p in pats:
+                if '<public>' in p:
+                    for g in pset:
+                        tmp.append(p.replace('<public>', g))
+                else:
+                    tmp.append(p)
+            pats = tmp
+            # 去重
+            seen = set()
+            out: List[str] = []
+            for p in pats:
+                if p not in seen:
+                    seen.add(p)
+                    out.append(p)
+            return out
+
+        def _name_match(name: str, pat: str) -> bool:
+            """专用于矩阵规则的匹配器，支持：
+            - module         -> 仅匹配该模块本身
+            - module.*       -> 仅匹配该模块的直接子模块
+            - module.**      -> 匹配该模块的任意后代（不含自身）
+            - 其他含 * 或 ?  -> 退回到 fnmatch 行为
+            - '*'            -> 任意
+            注意：这里不启用“末级段等值”捷径，避免语义歧义。
+            """
+            if pat == '*':
                 return True
-        return False
+            # module.** -> descendants only
+            if pat.endswith('.**'):
+                prefix = pat[:-3]
+                return name.startswith(prefix + '.') and name != prefix
+            # module.* -> direct children only
+            if pat.endswith('.*') and not pat.endswith('.**'):
+                prefix = pat[:-2]
+                if not name.startswith(prefix + '.'):
+                    return False
+                rest = name[len(prefix) + 1:]
+                return rest != '' and ('.' not in rest)
+            # generic wildcard -> fnmatch
+            if ('*' in pat) or ('?' in pat):
+                return fnmatch.fnmatch(name, pat)
+            # exact match only
+            return name == pat
+
+        # deny 优先
+        for pair in deny_patterns:
+            try:
+                s_pat, d_pat = pair
+            except Exception:
+                continue
+            s_list = _expand(str(s_pat))
+            d_list = _expand(str(d_pat))
+            for s_exp in s_list:
+                for d_exp in d_list:
+                    if _name_match(src, s_exp) and _name_match(dst, d_exp):
+                        return 'deny'
+
+        any_matrix = bool(allow_patterns or deny_patterns)
+
+        for pair in allow_patterns:
+            try:
+                s_pat, d_pat = pair
+            except Exception:
+                continue
+            s_list = _expand(str(s_pat))
+            d_list = _expand(str(d_pat))
+            for s_exp in s_list:
+                for d_exp in d_list:
+                    if _name_match(src, s_exp) and _name_match(dst, d_exp):
+                        return 'allow'
+
+        # 未命中 allow/deny：无论是否配置了矩阵条目，均按默认策略处理
+        return 'allow' if matrix_default == 'allow' else 'deny'
 
     def _check_private_module_import(self, to_node: NodeInfo) -> Optional[ImportViolation]:
         """当 forbid_private_modules 启用时，禁止导入路径包含私有段（以下划线开头）。"""
-        # 允许聚合门面白名单豁免
-        if self._match_any(to_node.name, getattr(self.rules, 'aggregator_whitelist', []) or []):
-            return None
         parts = to_node.name.split('.')
         if any(part.startswith('_') for part in parts):
             return ImportViolation(
@@ -109,164 +242,8 @@ class ImportRuleChecker:
                 severity="error",
             )
         return None
-
-    def _check_require_via_aggregator(self, from_node: NodeInfo, to_node: NodeInfo) -> Optional[ImportViolation]:
-        """当 require_via_aggregator 启用且跨包导入时，要求目标为聚合门面（PACKAGE）。
-
-        允许的最大外部深度通过 allowed_external_depth 控制（0=仅顶层包）。
-        可通过 aggregator_whitelist 对特定路径豁免。
-        """
-        # 非跨顶级包则不限制
-        f_top = from_node.name.split('.')[0] if from_node.name else ""
-        t_top = to_node.name.split('.')[0] if to_node.name else ""
-        if not f_top or not t_top or f_top == t_top:
-            return None
-        # 白名单豁免
-        if self._match_any(to_node.name, getattr(self.rules, 'aggregator_whitelist', []) or []):
-            return None
-        # 仅允许导向 PACKAGE，且深度不超过阈值
-        allowed_depth = int(getattr(self.rules, 'allowed_external_depth', 0) or 0)
-        # to_node.package_depth 在 NodeInfo.__post_init__ 中赋值（基于名称中的点数）
-        depth = getattr(to_node, 'package_depth', to_node.name.count('.'))
-        if to_node.node_type != NodeType.PACKAGE or depth > allowed_depth:
-            return ImportViolation(
-                from_node=from_node.name,
-                to_node=to_node.name,
-                violation_type="require_via_aggregator",
-                message=(
-                    f"跨包导入必须经聚合门面（PACKAGE/__init__.py），"
-                    f"且深度≤{allowed_depth}；检测到: {from_node.name} -> {to_node.name}"
-                ),
-                severity="error",
-            )
-        return None
     
-    def _is_in_whitelist(self, module_name: str) -> bool:
-        """检查模块是否在白名单中"""
-        for pattern in self.rules.white_list:
-            # 完整匹配
-            if fnmatch.fnmatch(module_name, pattern) or module_name == pattern:
-                return True
-            
-            # 支持简化名称匹配（只匹配最后一级）
-            module_parts = module_name.split('.')
-            if module_parts[-1] == pattern:
-                return True
-                
-        return False
-    
-    def _check_cross_package_violation(self, from_node: NodeInfo, to_node: NodeInfo) -> Optional[ImportViolation]:
-        """
-        检查跨包导入违规
-        
-        跨包导入指：不在同一个父包下的包之间的导入
-        例如：packageA.moduleX 导入 packageB.moduleY
-        """
-        from_parts = from_node.name.split('.')
-        to_parts = to_node.name.split('.')
-        
-        # 如果两个节点都只有一层（顶级），允许导入
-        if len(from_parts) <= 1 and len(to_parts) <= 1:
-            return None
-        
-        # 检查是否有共同的父包
-        # 如果没有共同的顶级包，这就是跨包导入
-        if len(from_parts) > 0 and len(to_parts) > 0:
-            if from_parts[0] != to_parts[0]:
-                return ImportViolation(
-                    from_node=from_node.name,
-                    to_node=to_node.name,
-                    violation_type="cross_package",
-                    message=f"跨包导入违规: {from_node.name} 不应导入不同顶级包 {to_node.name}",
-                    severity="error"
-                )
-        
-        return None
-    
-    def _check_upward_import_violation(self, from_node: NodeInfo, to_node: NodeInfo) -> Optional[ImportViolation]:
-        """
-        检查向上导入违规
-        
-        向上导入指：子模块导入父模块或祖先模块
-        例如：package.subpackage.module 导入 package
-        """
-        from_parts = from_node.name.split('.')
-        to_parts = to_node.name.split('.')
-        
-        # 如果to_node的路径是from_node路径的前缀，这就是向上导入
-        if len(to_parts) < len(from_parts):
-            to_prefix = '.'.join(to_parts)
-            from_prefix = '.'.join(from_parts[:len(to_parts)])
-            
-            if to_prefix == from_prefix:
-                return ImportViolation(
-                    from_node=from_node.name,
-                    to_node=to_node.name,
-                    violation_type="upward_import",
-                    message=f"向上导入违规: 子模块 {from_node.name} 不应导入父模块 {to_node.name}",
-                    severity="error"
-                )
-        
-        return None
-    
-    def _check_skip_level_violation(self, from_node: NodeInfo, to_node: NodeInfo) -> Optional[ImportViolation]:
-        """
-        检查跳级导入违规
-        
-        跳级导入指：跳过中间层级的导入
-        例如：a.b 导入 a.c.d.e，跳过了 a.c
-        
-        规则：只允许导入直接子级或同级模块
-        """
-        from_parts = from_node.name.split('.')
-        to_parts = to_node.name.split('.')
-        
-        # 检查是否为同级模块（共同父级）
-        if self._are_siblings(from_parts, to_parts):
-            return None
-        
-        # 检查是否为直接子级
-        if self._is_direct_child(from_parts, to_parts):
-            return None
-        
-        # 检查是否为直接父级（如果允许向上导入）
-        if self.rules.allow_upward_import and self._is_direct_parent(from_parts, to_parts):
-            return None
-        
-        # 其他情况都是跳级导入
-        return ImportViolation(
-            from_node=from_node.name,
-            to_node=to_node.name,
-            violation_type="skip_levels",
-            message=f"跳级导入违规: {from_node.name} 应该通过中间层级导入 {to_node.name}",
-            severity="warning"
-        )
-    
-    def _are_siblings(self, from_parts: List[str], to_parts: List[str]) -> bool:
-        """检查两个模块是否为同级（有相同的直接父级）"""
-        if len(from_parts) != len(to_parts):
-            return False
-        
-        # 比较除了最后一部分的所有部分
-        if len(from_parts) > 1:
-            return from_parts[:-1] == to_parts[:-1]
-        else:
-            # 都是顶级模块
-            return True
-    
-    def _is_direct_child(self, from_parts: List[str], to_parts: List[str]) -> bool:
-        """检查to_node是否为from_node的直接子级"""
-        if len(to_parts) != len(from_parts) + 1:
-            return False
-        
-        return to_parts[:-1] == from_parts
-    
-    def _is_direct_parent(self, from_parts: List[str], to_parts: List[str]) -> bool:
-        """检查to_node是否为from_node的直接父级"""
-        if len(from_parts) != len(to_parts) + 1:
-            return False
-        
-        return from_parts[:-1] == to_parts
+    # 旧的跨包/跳层/上行/聚合门面检查已移除，矩阵规则为唯一决策来源
 
 
 def check_import_violations(project_data: ProjectData) -> List[ImportViolation]:
@@ -286,17 +263,37 @@ def check_import_violations(project_data: ProjectData) -> List[ImportViolation]:
         from .config_loader import ImportRulesConfig
         rules_config = ImportRulesConfig()
     elif isinstance(rules_config, dict):
-        # 如果是字典，转换为ImportRulesConfig
+        # 若传入 dict，则按新机制字段构建 ImportRulesConfig（不做旧机制兼容）
         from .config_loader import ImportRulesConfig
         rules_obj = ImportRulesConfig()
-        if 'white_list' in rules_config:
-            rules_obj.white_list = rules_config['white_list']
-        if 'allow_cross_package' in rules_config:
-            rules_obj.allow_cross_package = rules_config['allow_cross_package']
-        if 'allow_upward_import' in rules_config:
-            rules_obj.allow_upward_import = rules_config['allow_upward_import']
-        if 'allow_skip_levels' in rules_config:
-            rules_obj.allow_skip_levels = rules_config['allow_skip_levels']
+        ap = rules_config.get('allow_patterns') or rules_config.get('allowed_patterns')
+        if isinstance(ap, list):
+            tmp: List[tuple[str, str]] = []
+            for it in ap:
+                if isinstance(it, (list, tuple)) and len(it) == 2:
+                    tmp.append((str(it[0]).strip(), str(it[1]).strip()))
+            rules_obj.allow_patterns = tmp
+        dp = rules_config.get('deny_patterns') or rules_config.get('denied_patterns')
+        if isinstance(dp, list):
+            tmpd: List[tuple[str, str]] = []
+            for it in dp:
+                if isinstance(it, (list, tuple)) and len(it) == 2:
+                    tmpd.append((str(it[0]).strip(), str(it[1]).strip()))
+            rules_obj.deny_patterns = tmpd
+        md = rules_config.get('matrix_default')
+        if isinstance(md, str) and md.strip().lower() in {'allow', 'deny'}:
+            rules_obj.matrix_default = md.strip().lower()
+        fpm = rules_config.get('forbid_private_modules')
+        if isinstance(fpm, bool):
+            rules_obj.forbid_private_modules = fpm
+        # schema（命名集合）
+        sc = rules_config.get('schema')
+        if isinstance(sc, dict):
+            parsed: Dict[str, List[str]] = {}
+            for k, v in sc.items():
+                if isinstance(v, list):
+                    parsed[str(k)] = [str(x) for x in v]
+            rules_obj.schema = parsed
         rules_config = rules_obj
     
     checker = ImportRuleChecker(rules_config)

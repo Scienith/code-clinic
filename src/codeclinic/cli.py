@@ -74,9 +74,27 @@ def main() -> None:
     # 1. 加载配置
     try:
         from codeclinic.config_loader import load_config, ExtendedConfig  # lazy import
-        config = load_config()
-        white_list_count = len(config.import_rules.white_list) if config.import_rules.white_list else 0
-        print(f"已加载配置: {white_list_count} 个白名单项")
+        # 优先从 --path 指定的项目根加载配置（就近原则）
+        cfg_from_project = None
+        if args.path:
+            from pathlib import Path as _Path
+            p = _Path(args.path)
+            if p.exists():
+                for fname in ("codeclinic.yaml", "codeclinic.yml", ".codeclinic.yaml", ".codeclinic.yml"):
+                    cand = p / fname
+                    if cand.exists():
+                        cfg_from_project = cand
+                        break
+        if cfg_from_project:
+            print(f"找到配置文件: {cfg_from_project}")
+            config = load_config(cfg_from_project)
+        else:
+            config = load_config()
+        # 摘要
+        apc = len(getattr(config.import_rules, 'allow_patterns', []) or [])
+        dpc = len(getattr(config.import_rules, 'deny_patterns', []) or [])
+        mdv = getattr(config.import_rules, 'matrix_default', 'deny')
+        print(f"已加载配置: 矩阵 allow {apc} 条, deny {dpc} 条, 默认 {mdv}")
     except Exception as e:
         print(f"警告: 配置加载失败，使用默认配置: {e}")
         from codeclinic.config_loader import ExtendedConfig  # lazy import fallback

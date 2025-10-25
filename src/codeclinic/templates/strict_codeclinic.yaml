@@ -1,0 +1,106 @@
+version: "1.0"
+
+# Strict baseline for CodeClinic (matrix allow-list + strict QA gates)
+
+import_rules:
+  rules:
+    # Enforce strict allow-list: everything not listed is a violation
+    matrix_default: deny
+    # Forbid private path segments (names starting with underscore)
+    forbid_private_modules: true
+    # Allow-list (source=importer, target=imported)
+    allow_patterns:
+      # Allow importing direct children of the importer (e.g., A -> A.x)
+      - ["*", "<self>.*"]
+
+      # Same-domain adjacency (top-down): api -> services -> selectors -> models
+      - ["<ancestor>.api.**", "<ancestor>.services.**"]
+      - ["<ancestor>.services.**", "<ancestor>.selectors.**"]
+      - ["<ancestor>.selectors.**", "<ancestor>.models"]
+      - ["<ancestor>.selectors.**", "<ancestor>.models.**"]
+
+      # Same-domain contracts (read-only)
+      - ["*", "<ancestor>.schemas"]
+      - ["*", "<ancestor>.schemas.**"]
+      - ["*", "<ancestor>.types"]
+      - ["*", "<ancestor>.types.**"]
+
+      # Cross-domain: public-only
+      - ["apps.*.**", "apps.*.public"]
+      - ["apps.*.**", "apps.*.public.**"]
+
+      # Global layers (may be adjusted per project)
+      - ["*", "utils"]
+      - ["*", "utils.**"]
+      - ["*", "types"]
+      - ["*", "types.**"]
+      - ["*", "common"]
+      - ["*", "common.**"]
+
+      # (Optional) write-path special case: services -> models
+      # - ["<ancestor>.services.**", "<ancestor>.models"]
+      # - ["<ancestor>.services.**", "<ancestor>.models.**"]
+
+tool:
+  # Default project roots to scan (override via --path)
+  paths: ["src"]
+  include: ["**/*.py"]
+  exclude: ["**/.venv/**", "**/migrations/**", "**/tests/**"]
+  output: "build/codeclinic"
+
+tools:
+  formatter:
+    provider: black
+    line_length: 88
+  linter:
+    provider: ruff
+    ruleset: ["E","F","I","B","D"]
+    line_length: 88
+    unsafe_fixes: false
+    # Optional docstyle convention
+    docstyle_convention: "google"
+  typecheck:
+    provider: mypy
+    strict: true
+  tests:
+    provider: pytest
+    args: ["-q"]
+    coverage:
+      min: 80
+      report: "xml"
+    junit:
+      enabled: true
+      output: "build/codeclinic/artifacts/junit.xml"
+  complexity:
+    provider: radon
+    max_file_loc: 500
+  deps:
+    provider: internal
+  stubs:
+    provider: internal
+    decorator_names: ["stub"]
+
+gates:
+  formatter_clean: true
+  linter_errors_max: 0
+  mypy_errors_max: 0
+  coverage_min: 80
+  max_file_loc: 500
+  import_violations_max: 0
+  stub_ratio_max: 0.25
+  # Optional extensions
+  doc_contracts_missing_max: 0
+  fn_loc_max: 50
+  fn_args_max: 5
+  fn_nesting_max: 3
+  exports_no_private: true
+  components_dep_stub_free_requires_green: true
+  allow_missing_component_tests: false
+  packages_require_dunder_init: true
+  modules_require_named_tests: true
+
+components:
+  scope: package
+  tests_dir_name: tests
+  dependency_scope: transitive
+  require_self_stub_free: false

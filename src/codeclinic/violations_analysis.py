@@ -73,10 +73,26 @@ def save_violations_report(
     
     # 生成可视化图
     svg_path = _generate_violations_graph(violations_data, project_data, violations_dir)
+    # 额外：生成包树+依赖叠加图
+    try:
+        from .graphviz_render import render_violations_tree_graph
+        tree_base = violations_dir / "violations_tree"
+        render_violations_tree_graph(
+            project_data.nodes,
+            violations_data["legal_edges"],
+            violations_data["violation_edges"],
+            str(tree_base),
+            child_edges=project_data.child_edges,
+        )
+    except Exception as e:
+        print(f"警告: 生成包树可视化图时出错: {e}")
     
     print(f"✓ 违规报告保存到: {json_path}")
     if svg_path:
         print(f"✓ 违规可视化保存到: {svg_path}")
+    tree_svg = (violations_dir / "violations_tree.svg")
+    if tree_svg.exists():
+        print(f"✓ 包树可视化保存到: {tree_svg}")
     
     return json_path
 
@@ -115,13 +131,19 @@ def _extract_rules_config(config: Dict[str, Any]) -> Dict[str, Any]:
     if hasattr(import_rules, '__dict__'):
         # 如果是ImportRulesConfig对象
         return {
-            "white_list": import_rules.white_list,
-            "allow_cross_package": import_rules.allow_cross_package,
-            "allow_upward_import": import_rules.allow_upward_import,
-            "allow_skip_levels": import_rules.allow_skip_levels
+            "matrix_default": getattr(import_rules, 'matrix_default', 'deny'),
+            "allow_patterns": getattr(import_rules, 'allow_patterns', []),
+            "deny_patterns": getattr(import_rules, 'deny_patterns', []),
+            "forbid_private_modules": getattr(import_rules, 'forbid_private_modules', False),
         }
     elif isinstance(import_rules, dict):
-        return import_rules
+        # 尽量返回新机制的关键字段
+        return {
+            "matrix_default": import_rules.get('matrix_default'),
+            "allow_patterns": import_rules.get('allow_patterns') or import_rules.get('allowed_patterns'),
+            "deny_patterns": import_rules.get('deny_patterns') or import_rules.get('denied_patterns'),
+            "forbid_private_modules": import_rules.get('forbid_private_modules'),
+        }
     else:
         return {}
 

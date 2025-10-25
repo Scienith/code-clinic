@@ -48,6 +48,9 @@ codeclinic = "codeclinic.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/codeclinic"]
+include = [
+  "src/codeclinic/templates/strict_codeclinic.yaml",
+]
 
 [tool.hatch.build.targets.sdist]
 include = [

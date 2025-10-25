@@ -192,26 +192,36 @@ def _extract_imports(file_path: Path) -> Set[str]:
 
 
 def _resolve_import(imported_name: str, importer_module: str, all_modules: Dict[str, Path]) -> Optional[str]:
+    """Resolve import to internal module only; treat third-party as external.
+    Rules:
+      - exact match
+      - only consider names whose top-level segment is among internal top-levels
+      - prefix match (imported_name as package prefix)
     """
-    Resolve an import name to an actual module name.
-    
-    This is a simplified resolver - in a real implementation you might want
-    to handle relative imports, namespace packages, etc.
-    """
-    # Direct match
     if imported_name in all_modules:
         return imported_name
-    
-    # Try to find partial matches for submodules
+
+    top = imported_name.split('.')[0] if imported_name else ''
+    internal_toplevel = {n.split('.')[0] for n in all_modules.keys() if n}
+    if top not in internal_toplevel:
+        # Try stripping first segment (e.g., example_project.common -> common)
+        parts = imported_name.split('.')
+        if len(parts) > 1:
+            stripped = '.'.join(parts[1:])
+            if stripped in all_modules:
+                return stripped
+            stripped_top = stripped.split('.')[0]
+            if stripped_top in internal_toplevel:
+                for module_name in all_modules:
+                    if module_name == stripped or module_name.startswith(stripped + '.'):
+                        return module_name
+        return None
+
     for module_name in all_modules:
-        if module_name.startswith(imported_name + '.') or module_name.endswith('.' + imported_name):
+        if module_name == imported_name or module_name.startswith(imported_name + '.'):
             return module_name
-    
-    # Handle relative imports (simplified)
-    if imported_name.startswith('.'):
-        # This would need more sophisticated handling in a real implementation
-        pass
-    
+
+    # Relative imports not handled here
     return None
 
 

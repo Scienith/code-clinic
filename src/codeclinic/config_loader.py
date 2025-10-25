@@ -37,6 +37,13 @@ class ImportRulesConfig:
     allowed_external_depth: int = 0
     # 聚合门面白名单（允许直连的门面模块前缀或完整名）
     aggregator_whitelist: List[str] = field(default_factory=list)
+    # 新增：基于矩阵的允许/禁止规则（source, target），支持宏 <ancestor>
+    allow_patterns: List[tuple[str, str]] = field(default_factory=list)
+    deny_patterns: List[tuple[str, str]] = field(default_factory=list)
+    # 新增：矩阵默认策略：deny|allow（当 allow_patterns 非空但未匹配时如何处理）
+    matrix_default: str = "deny"
+    # 命名集合（schema），如 global/public，可在模式中用 <global>/<public> 宏展开
+    schema: Dict[str, List[str]] = field(default_factory=dict)
 
 
 @dataclass 
@@ -229,6 +236,35 @@ def _parse_config_data(data: Dict[str, Any]) -> ExtendedConfig:
                     import_rules.allowed_external_depth = int(rule_switches['allowed_external_depth'])
                 except Exception:
                     import_rules.allowed_external_depth = 0
+            # 新增：矩阵与默认策略
+            allow_patterns = rule_switches.get('allow_patterns') or rule_switches.get('allowed_patterns')
+            if isinstance(allow_patterns, list):
+                parsed: list[tuple[str, str]] = []
+                for item in allow_patterns:
+                    if isinstance(item, (list, tuple)) and len(item) == 2:
+                        src, dst = str(item[0]).strip(), str(item[1]).strip()
+                        parsed.append((src, dst))
+                import_rules.allow_patterns = parsed
+            deny_patterns = rule_switches.get('deny_patterns') or rule_switches.get('denied_patterns')
+            if isinstance(deny_patterns, list):
+                parsed_d: list[tuple[str, str]] = []
+                for item in deny_patterns:
+                    if isinstance(item, (list, tuple)) and len(item) == 2:
+                        src, dst = str(item[0]).strip(), str(item[1]).strip()
+                        parsed_d.append((src, dst))
+                import_rules.deny_patterns = parsed_d
+            if 'matrix_default' in rule_switches:
+                val = str(rule_switches['matrix_default']).strip().lower()
+                if val in {"deny", "allow"}:
+                    import_rules.matrix_default = val
+            # schema 命名集合
+            schema = rule_switches.get('schema')
+            if isinstance(schema, dict):
+                parsed_schema: Dict[str, List[str]] = {}
+                for k, v in schema.items():
+                    if isinstance(v, list):
+                        parsed_schema[str(k)] = [str(x) for x in v]
+                import_rules.schema = parsed_schema
         
         # 支持旧版格式（直接在import_rules下）
         if 'allow_cross_package' in rules_data:
@@ -248,6 +284,35 @@ def _parse_config_data(data: Dict[str, Any]) -> ExtendedConfig:
                 import_rules.allowed_external_depth = 0
         if 'aggregator_whitelist' in rules_data:
             import_rules.aggregator_whitelist = rules_data['aggregator_whitelist']
+        # schema 可直接在 import_rules 下声明
+        schema2 = rules_data.get('schema')
+        if isinstance(schema2, dict):
+            parsed_schema2: Dict[str, List[str]] = {}
+            for k, v in schema2.items():
+                if isinstance(v, list):
+                    parsed_schema2[str(k)] = [str(x) for x in v]
+            import_rules.schema = parsed_schema2
+        # 旧版兼容：允许直接在 import_rules 下声明矩阵
+        allow_patterns2 = rules_data.get('allow_patterns') or rules_data.get('allowed_patterns')
+        if isinstance(allow_patterns2, list):
+            parsed2: list[tuple[str, str]] = []
+            for item in allow_patterns2:
+                if isinstance(item, (list, tuple)) and len(item) == 2:
+                    src, dst = str(item[0]).strip(), str(item[1]).strip()
+                    parsed2.append((src, dst))
+            import_rules.allow_patterns = parsed2
+        deny_patterns2 = rules_data.get('deny_patterns') or rules_data.get('denied_patterns')
+        if isinstance(deny_patterns2, list):
+            parsed2d: list[tuple[str, str]] = []
+            for item in deny_patterns2:
+                if isinstance(item, (list, tuple)) and len(item) == 2:
+                    src, dst = str(item[0]).strip(), str(item[1]).strip()
+                    parsed2d.append((src, dst))
+            import_rules.deny_patterns = parsed2d
+        if 'matrix_default' in rules_data:
+            val2 = str(rules_data['matrix_default']).strip().lower()
+            if val2 in {"deny", "allow"}:
+                import_rules.matrix_default = val2
         
         config.import_rules = import_rules
     
@@ -296,6 +361,40 @@ import_rules:
     forbid_private_modules: true  # 禁止导入路径包含私有段（以_开头）
     require_via_aggregator: false # 若允许跨包导入，则要求目标为聚合门面（PACKAGE/__init__.py）
     allowed_external_depth: 0     # 仅允许顶层包作为门面（0）；>0 允许子包作为聚合门面
+    
+    # 命名集合（schema）：可在规则中使用 <global> 与 <public>
+    schema:
+      global: ["utils", "utils.**", "types", "types.**", "common", "common.**"]
+      public: ["*.public", "*.public.**"]
+    
+    # 可选：基于矩阵的允许/禁止规则（source=导入方，target=被导入）
+    # 语义：
+    #   - pattern         精确匹配该模块
+    #   - pattern.*       仅直接子模块
+    #   - pattern.**      任意后代（不含自身）
+    #   - <self>          导入方自身（用于 target 如 <self>.* 代表“导入方的直接子模块”）
+    #   - <ancestor>      导入方的严格祖先包（存在于项目且为PACKAGE）
+    #   - <global>/<public> 来自 schema 命名集合
+    #   - 其他 * 或 ?     使用 fnmatch 语义
+    # 示例：
+    # allow_patterns:
+    #   # 邻接层：api -> services, services -> selectors, selectors -> models
+    #   - ["apps.*.api*", "apps.*.services*"]
+    #   - ["apps.*.services*", "apps.*.selectors*"]
+    #   - ["apps.*.selectors*", "apps.*.models*"]
+    #   # 同域 Contracts（任意子模块 -> 本域 contracts）
+    #   - ["*", "<ancestor>.schemas*"]
+    #   - ["*", "<ancestor>.types*"]
+    #   # 跨域仅允许 public 出口
+    #   - ["apps.*.*", "apps.*.public.*"]
+    #   # Global 直连（utils/types/common）
+    #   - ["*", "utils*"]
+    #   - ["*", "types*"]
+    #   - ["*", "common*"]
+    # deny_patterns:
+    #   # 显式禁止跳层（例如 api 直达 models）
+    #   - ["apps.*.api*", "apps.*.models*"]
+    # matrix_default: deny  # 当存在 allow_patterns 但未匹配时：deny|allow
 """
 
 
@@ -334,13 +433,10 @@ def _show_default_config_info() -> None:
     """显示默认配置信息"""
     print("📋 使用默认配置:")
     print("━" * 40)
-    print("🔒 导入规则:")
-    print("  ❌ 跨包导入 (禁止)")
-    print("  ❌ 向上导入 (禁止)")
-    print("  ❌ 跳级导入 (禁止)")
-    print("  ❌ 导入私有模块 (禁止，默认关闭，可开启)")
-    print("  ❌ 跨包必须经聚合门面 (默认关闭，可开启)")
-    print("  📝 白名单: 无")
+    print("🔒 导入规则（矩阵白名单）:")
+    print("  🧩 matrix_default: deny")
+    print("  🔗 allow_patterns: 0 条（未配置即全拒）")
+    print("  ⛔ forbid_private_modules: 可开启")
     print()
     print("💡 提示:")
     print("  • 生成配置: 'codeclinic --init'")

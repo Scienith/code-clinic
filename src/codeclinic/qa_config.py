@@ -77,6 +77,17 @@ class ImportRules:
     allow_upward_import: bool = False
     allow_skip_levels: bool = False
     white_list: List[str] = field(default_factory=list)
+    # 扩展：矩阵规则（与主CLI保持一致的字段名）
+    allow_patterns: List[tuple[str, str]] = field(default_factory=list)
+    deny_patterns: List[tuple[str, str]] = field(default_factory=list)
+    matrix_default: str = "deny"
+    # 可选：聚合门面规则（与主CLI保持一致）
+    forbid_private_modules: bool = False
+    require_via_aggregator: bool = False
+    allowed_external_depth: int = 0
+    aggregator_whitelist: List[str] = field(default_factory=list)
+    # 命名集合（schema）：如 global/public
+    schema: Dict[str, List[str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -185,10 +196,9 @@ tools:
   deps:
     provider: internal
     import_rules:
-      allow_cross_package: false
-      allow_upward_import: false
-      allow_skip_levels: false
-      white_list: []
+      matrix_default: deny
+      forbid_private_modules: true
+      allow_patterns: []
   stubs:
     provider: internal
     decorator_names: ["stub"]
@@ -270,6 +280,39 @@ def load_qa_config(path: str | Path) -> QAConfig:
     cfg.tools.deps.import_rules.allow_upward_import = bool(ir.get("allow_upward_import", cfg.tools.deps.import_rules.allow_upward_import))
     cfg.tools.deps.import_rules.allow_skip_levels = bool(ir.get("allow_skip_levels", cfg.tools.deps.import_rules.allow_skip_levels))
     cfg.tools.deps.import_rules.white_list = list(ir.get("white_list", cfg.tools.deps.import_rules.white_list))
+    # 矩阵规则（允许/禁止）
+    def _parse_pairs(val: Any) -> List[tuple[str, str]]:
+        out: List[tuple[str, str]] = []
+        if isinstance(val, list):
+            for item in val:
+                if isinstance(item, (list, tuple)) and len(item) == 2:
+                    s, t = str(item[0]).strip(), str(item[1]).strip()
+                    out.append((s, t))
+        return out
+    ap = ir.get("allow_patterns") or ir.get("allowed_patterns")
+    dp = ir.get("deny_patterns") or ir.get("denied_patterns")
+    cfg.tools.deps.import_rules.allow_patterns = _parse_pairs(ap)
+    cfg.tools.deps.import_rules.deny_patterns = _parse_pairs(dp)
+    md = ir.get("matrix_default")
+    if isinstance(md, str) and md.strip().lower() in {"deny", "allow"}:
+        cfg.tools.deps.import_rules.matrix_default = md.strip().lower()
+    # 聚合门面与私有路径段
+    cfg.tools.deps.import_rules.forbid_private_modules = bool(ir.get("forbid_private_modules", cfg.tools.deps.import_rules.forbid_private_modules))
+    cfg.tools.deps.import_rules.require_via_aggregator = bool(ir.get("require_via_aggregator", cfg.tools.deps.import_rules.require_via_aggregator))
+    try:
+        aed = ir.get("allowed_external_depth", cfg.tools.deps.import_rules.allowed_external_depth)
+        cfg.tools.deps.import_rules.allowed_external_depth = int(aed)
+    except Exception:
+        pass
+    cfg.tools.deps.import_rules.aggregator_whitelist = list(ir.get("aggregator_whitelist", cfg.tools.deps.import_rules.aggregator_whitelist))
+    # schema 命名集合
+    schema = ir.get("schema") or {}
+    if isinstance(schema, dict):
+        parsed: Dict[str, List[str]] = {}
+        for k, v in schema.items():
+            if isinstance(v, list):
+                parsed[str(k)] = [str(x) for x in v]
+        cfg.tools.deps.import_rules.schema = parsed
 
     stubs = tools.get("stubs") or {}
     cfg.tools.stubs.provider = stubs.get("provider", cfg.tools.stubs.provider)

@@ -1,0 +1,20 @@
+version: "1.0"
+
+# 项目级配置：与被分析项目同目录，CLI 会优先读取此文件
+
+import_rules:
+  rules:
+    # 严格白名单：仅允许下方声明的导入边
+    matrix_default: deny
+    # 禁止导入路径中出现以下划线开头的私有段
+    forbid_private_modules: true
+
+    # 允许规则（source=导入方，target=被导入）
+    allow_patterns:
+      # 允许导入“自身的直接子模块”（例：A -> A.A1、A.A1 -> A.A1.A11）
+      - ["*", "<self>.*"]
+
+      # 任何位置都能导入 common（根与直接子模块）
+      - ["*", "common"]
+      - ["*", "common.*"]
+

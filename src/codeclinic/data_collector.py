@@ -267,39 +267,40 @@ def _analyze_node_imports(node: NodeInfo, all_nodes: Dict[str, NodeInfo]) -> Non
 
 
 def _resolve_import(import_name: str, all_nodes: Dict[str, NodeInfo]) -> Optional[str]:
-    """解析导入名称到实际模块"""
+    """解析导入名称到实际模块（严格内部解析）。
+    仅当导入名明确指向项目内节点时才返回匹配结果；否则视为外部依赖（返回None）。
+    规则：
+      - 直接匹配 import_name -> 内部节点
+      - 若 import_name 的顶级段不在项目内部顶级集合中，则认为是外部库 -> None
+      - 前缀匹配：若存在内部节点以 import_name 为前缀（import_name.**）则返回该内部节点
+      - 不进行后缀/任意祖先的模糊匹配，避免将第三方包误判为内部
+    """
     # 直接匹配
     if import_name in all_nodes:
         return import_name
-    
-    # 处理绝对导入（如 example_project.common -> common）
-    parts = import_name.split('.')
-    if len(parts) > 1:
-        # 尝试移除第一个部分（项目名）
-        relative_name = '.'.join(parts[1:])
-        if relative_name in all_nodes:
-            return relative_name
-        
-        # 尝试移除更多前缀部分
-        for i in range(2, len(parts)):
-            candidate = '.'.join(parts[i:])
-            if candidate in all_nodes:
-                return candidate
-    
-    # 寻找部分匹配
+
+    # 仅当顶级段属于内部顶级包/模块时，才尝试前缀匹配
+    top = import_name.split('.')[0] if import_name else ''
+    internal_toplevel = {n.split('.')[0] for n in all_nodes.keys() if n}
+    if top not in internal_toplevel:
+        # 尝试移除首段（如 example_project.common -> common）
+        parts = import_name.split('.')
+        if len(parts) > 1:
+            stripped = '.'.join(parts[1:])
+            if stripped in all_nodes:
+                return stripped
+            stripped_top = stripped.split('.')[0]
+            if stripped_top in internal_toplevel:
+                for node_name in all_nodes:
+                    if node_name == stripped or node_name.startswith(stripped + '.'):
+                        return node_name
+        return None
+
+    # 前缀匹配：import_name 作为内部节点的前缀
     for node_name in all_nodes:
-        if node_name.startswith(import_name + '.') or node_name.endswith('.' + import_name):
+        if node_name == import_name or node_name.startswith(import_name + '.'):
             return node_name
-        
-        # 检查是否为相同的后缀（如 example_project.A.A1.A12 匹配 A.A1.A12）
-        if import_name.endswith('.' + node_name) or node_name.endswith('.' + import_name.split('.')[-1]):
-            # 更精确的后缀匹配
-            import_parts = import_name.split('.')
-            node_parts = node_name.split('.')
-            if len(import_parts) >= len(node_parts):
-                if import_parts[-len(node_parts):] == node_parts:
-                    return node_name
-    
+
     return None
 
 
