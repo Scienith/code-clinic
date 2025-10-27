@@ -254,11 +254,13 @@ def render_stub_heatmap(
     # 添加节点，使用统一样式，边框可叠加测试通过/失败状态
     for name, node in nodes.items():
         display_name = _get_short_name(name)
-        # Aggregated ratio for package nodes; direct ratio for modules
+        # 统一以“stub/total”为标签口径；package 采用聚合，module 直接取节点数据
         if node.node_type == NodeType.PACKAGE:
             stubs, total, ratio = _aggregate_pkg_ratio(name)
         else:
-            ratio = node.stub_ratio
+            stubs = int(node.stubs)
+            total = int(node.functions_total)
+            ratio = (stubs / max(1, total)) if total else 0.0
         pct = int(round(ratio * 100))
         
         # 使用统一的白色背景
@@ -289,15 +291,14 @@ def render_stub_heatmap(
                     test_color = "#c62828"
                 tests_line = f"<TR><TD>Tests: <FONT COLOR=\"{test_color}\">{passed}/{total}</FONT></TD></TR>"
 
-        # 计算实现比例（非stub）
-        implemented = node.functions_public - node.stubs
+        # 进度条以完成度（1 - stub_ratio）展示
         implemented_pct = int(round((1.0 - ratio) * 100))
         
         # 创建HTML标签包含进度条
         label = f'''<
         <TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0">
             <TR><TD>{type_indicator} {display_name}</TD></TR>
-            <TR><TD>{implemented}/{node.functions_public} ({implemented_pct}%)</TD></TR>
+            <TR><TD>stub {stubs}/{max(1, total)} ({pct}%)</TD></TR>
             {tests_line}
             <TR><TD>{progress_bar}</TD></TR>
         </TABLE>
