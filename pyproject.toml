@@ -52,6 +52,10 @@ include = [
   "src/codeclinic/templates/strict_codeclinic.yaml",
 ]
 
+include = [
+  "src/codeclinic/templates/strict_codeclinic.yaml",
+  "src/codeclinic/py.typed",
+]
 [tool.hatch.build.targets.sdist]
 include = [
   "/src",
