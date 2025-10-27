@@ -6,6 +6,29 @@ from .types import Modules, GraphEdges, ChildEdges
 from .node_types import NodeInfo, NodeType
 
 
+def _aggregate_pkg_ratio_generic(name: str, modules: Modules) -> tuple[int, int, float]:
+    node = modules[name]
+    if node.node_type != NodeType.PACKAGE:
+        return int(node.stubs), int(node.functions_total), float(node.stub_ratio)
+    stubs = 0
+    total = 0
+    stack = [name]
+    seen = set()
+    while stack:
+        cur = stack.pop()
+        if cur in seen:
+            continue
+        seen.add(cur)
+        if cur in modules:
+            nd = modules[cur]
+            stubs += int(nd.stubs)
+            total += int(nd.functions_total)
+            for ch in nd.children:
+                stack.append(ch)
+    ratio = (stubs / max(1, total)) if total else 0.0
+    return stubs, total, ratio
+
+
 def _color_for_ratio(r: float) -> str:
     # simple traffic light
     if r <= 0.05:
@@ -34,32 +57,9 @@ def render_graph(modules: Modules, edges: GraphEdges, child_edges: ChildEdges, o
         edge_attr={"arrowhead": "vee"},
     )
 
-    def _aggregate_pkg_ratio(nm: str) -> tuple[int, int, float]:
-        node = modules[nm]
-        if node.node_type != NodeType.PACKAGE:
-            return node.stubs, node.functions_total, node.stub_ratio
-        # aggregate over all descendants (package + modules)
-        stubs = 0
-        total = 0
-        stack = [nm]
-        seen = set()
-        while stack:
-            cur = stack.pop()
-            if cur in seen:
-                continue
-            seen.add(cur)
-            if cur in modules:
-                nd = modules[cur]
-                stubs += int(nd.stubs)
-                total += int(nd.functions_total)
-                for ch in nd.children:
-                    stack.append(ch)
-        ratio = (stubs / max(1, total)) if total else 0.0
-        return stubs, total, ratio
-
     for name, st in modules.items():
         # Use aggregated ratio/denominator for packages; direct for modules
-        stubs, total, ratio = _aggregate_pkg_ratio(name)
+        stubs, total, ratio = _aggregate_pkg_ratio_generic(name, modules)
         pct = int(round(ratio * 100))
         display_name = _get_short_name(name)
         label = f"{display_name}\nstub {stubs}/{max(1, total)} ({pct}%)"
@@ -256,7 +256,7 @@ def render_stub_heatmap(
         display_name = _get_short_name(name)
         # 统一以“stub/total”为标签口径；package 采用聚合，module 直接取节点数据
         if node.node_type == NodeType.PACKAGE:
-            stubs, total, ratio = _aggregate_pkg_ratio(name)
+            stubs, total, ratio = _aggregate_pkg_ratio_generic(name, nodes)
         else:
             stubs = int(node.stubs)
             total = int(node.functions_total)
