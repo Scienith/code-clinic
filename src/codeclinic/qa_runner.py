@@ -107,7 +107,7 @@ def qa_run(config_path: str = "codeclinic.yaml", output_override: Optional[str] 
     # 不再提供全局 stubs 指标与报表
 
     # Component tests aggregation (dependency-aware)
-    comp_report, comp_summary = _aggregate_component_tests(cfg, artifacts_dir, project_data, stub_data, junit_xml)
+    comp_report, comp_summary = _aggregate_component_tests(cfg, artifacts_dir, project_data, {}, junit_xml)
     results["metrics"]["component_tests"] = {
         "provider": "pytest+junit",
         "components_total": comp_summary.get("components_total"),
