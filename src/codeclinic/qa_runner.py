@@ -376,7 +376,14 @@ def _run_internal_analyses(cfg: QAConfig, artifacts_dir: Path) -> Tuple[Dict[str
         "status": "passed" if len(vdata["violations"]) == 0 else "failed",
     }
 
-    # 按要求：移除 stub 比例统计与报表
+    # Stub 明细报表：仅生成每模块/包的明细与热力图，不产出项目级聚合与门禁
+    try:
+        from .stub_analysis import analyze_stub_completeness
+        from .stub_report import save_stub_report
+        sdata = analyze_stub_completeness(project_data)
+        _ = save_stub_report(sdata, project_data, artifacts_dir)
+    except Exception:
+        pass
     return dep_metrics, project_data
 
 

@@ -34,12 +34,35 @@ def render_graph(modules: Modules, edges: GraphEdges, child_edges: ChildEdges, o
         edge_attr={"arrowhead": "vee"},
     )
 
+    def _aggregate_pkg_ratio(nm: str) -> tuple[int, int, float]:
+        node = modules[nm]
+        if node.node_type != NodeType.PACKAGE:
+            return node.stubs, node.functions_total, node.stub_ratio
+        # aggregate over all descendants (package + modules)
+        stubs = 0
+        total = 0
+        stack = [nm]
+        seen = set()
+        while stack:
+            cur = stack.pop()
+            if cur in seen:
+                continue
+            seen.add(cur)
+            if cur in modules:
+                nd = modules[cur]
+                stubs += int(nd.stubs)
+                total += int(nd.functions_total)
+                for ch in nd.children:
+                    stack.append(ch)
+        ratio = (stubs / max(1, total)) if total else 0.0
+        return stubs, total, ratio
+
     for name, st in modules.items():
-        ratio = st.stub_ratio
+        # Use aggregated ratio/denominator for packages; direct for modules
+        stubs, total, ratio = _aggregate_pkg_ratio(name)
         pct = int(round(ratio * 100))
-        # Use short name for display (last part of module path)
         display_name = _get_short_name(name)
-        label = f"{display_name}\nstub {st.stubs}/{max(1, st.functions_public)} ({pct}%)"
+        label = f"{display_name}\nstub {stubs}/{max(1, total)} ({pct}%)"
         dot.node(name, label=label, fillcolor=_color_for_ratio(ratio))
 
     # Determine which edges have both import and child relationships
@@ -231,7 +254,11 @@ def render_stub_heatmap(
     # 添加节点，使用统一样式，边框可叠加测试通过/失败状态
     for name, node in nodes.items():
         display_name = _get_short_name(name)
-        ratio = node.stub_ratio
+        # Aggregated ratio for package nodes; direct ratio for modules
+        if node.node_type == NodeType.PACKAGE:
+            stubs, total, ratio = _aggregate_pkg_ratio(name)
+        else:
+            ratio = node.stub_ratio
         pct = int(round(ratio * 100))
         
         # 使用统一的白色背景

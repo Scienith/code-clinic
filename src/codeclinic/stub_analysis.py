@@ -45,16 +45,13 @@ def analyze_stub_completeness(project_data: ProjectData) -> Dict[str, Any]:
     # 按package_depth降序排列
     stub_functions.sort(key=lambda x: x["package_depth"], reverse=True)
     
-    # 全局统计
-    total_functions = sum(node.functions_public for node in project_data.nodes.values())
-    total_stubs = sum(node.stubs for node in project_data.nodes.values())
-    global_stub_ratio = total_stubs / max(1, total_functions)
-    
     result = {
         "stub_functions": stub_functions
     }
-    
-    print(f"Stub分析完成: {total_stubs}/{total_functions} 函数为stub ({global_stub_ratio:.1%})")
+    # 输出简单统计（不再报告项目级占比）
+    total_functions = sum(node.functions_total for node in project_data.nodes.values())
+    total_stubs = sum(node.stubs for node in project_data.nodes.values())
+    print(f"Stub分析完成: {total_stubs}/{total_functions} 函数为stub")
     
     return result
 

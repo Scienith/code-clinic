@@ -73,7 +73,8 @@ class NodeInfo:
         self.functions_total = total_functions
         self.functions_public = total_public_functions
         self.stubs = total_stubs
-        self.stub_ratio = total_stubs / max(1, total_public_functions) if total_public_functions > 0 else 0.0
+        # 按要求：分母为“函数+方法总数”，不区分public
+        self.stub_ratio = total_stubs / max(1, total_functions)
         self.package_depth = self.name.count('.')
 
 
