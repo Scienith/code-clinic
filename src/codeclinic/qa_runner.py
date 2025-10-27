@@ -101,10 +101,10 @@ def qa_run(config_path: str = "codeclinic.yaml", output_override: Optional[str] 
         "status": cpx_status,
     }
 
-    # Internal: deps + stubs (+project data/stub data for component gate)
-    deps_metrics, stubs_metrics, project_data, stub_data = _run_internal_analyses(cfg, artifacts_dir)
+    # Internal: deps (+project data)。按要求移除 stub 比例统计/报表
+    deps_metrics, project_data = _run_internal_analyses(cfg, artifacts_dir)
     results["metrics"]["deps"] = deps_metrics
-    results["metrics"]["stubs"] = stubs_metrics
+    # 不再提供全局 stubs 指标与报表
 
     # Component tests aggregation (dependency-aware)
     comp_report, comp_summary = _aggregate_component_tests(cfg, artifacts_dir, project_data, stub_data, junit_xml)
@@ -150,9 +150,7 @@ def qa_run(config_path: str = "codeclinic.yaml", output_override: Optional[str] 
         gates_failed.append("coverage_min")
     if deps_metrics.get("violations") is not None and deps_metrics["violations"] > g.import_violations_max:
         gates_failed.append("import_violations_max")
-    stub_ratio = stubs_metrics.get("stub_ratio")
-    if stub_ratio is not None and stub_ratio > g.stub_ratio_max:
-        gates_failed.append("stub_ratio_max")
+    # 按要求：移除 stub 比例门禁
     # Complexity gates
     max_loc = cpx_summary.get("max_file_loc") if cpx_summary else None
     if isinstance(max_loc, int) and max_loc > g.max_file_loc:
@@ -350,7 +348,7 @@ def _run_pytest_coverage(cfg: QAConfig, logs_dir: Path, artifacts_dir: Path, out
     return (status, str(log_path), cov_pct, str(cov_xml) if cov_xml.exists() else None, str(junit_xml_path) if junit_xml_path else None)
 
 
-def _run_internal_analyses(cfg: QAConfig, artifacts_dir: Path) -> Tuple[Dict[str, Any], Dict[str, Any], Any, Dict[str, Any]]:
+def _run_internal_analyses(cfg: QAConfig, artifacts_dir: Path) -> Tuple[Dict[str, Any], Any]:
     # Prepare minimal adapter to existing collector
     from .data_collector import collect_project_data
     from .violations_analysis import analyze_violations, save_violations_report
@@ -378,21 +376,8 @@ def _run_internal_analyses(cfg: QAConfig, artifacts_dir: Path) -> Tuple[Dict[str
         "status": "passed" if len(vdata["violations"]) == 0 else "failed",
     }
 
-    # Stubs
-    sdata = analyze_stub_completeness(project_data)
-    sjson = save_stub_report(sdata, project_data, artifacts_dir)
-    total_public = sum(n.functions_public for n in project_data.nodes.values())
-    total_stubs = sum(n.stubs for n in project_data.nodes.values())
-    ratio = (total_stubs * 100) / max(1, total_public)
-    stub_metrics = {
-        "provider": cfg.tools.stubs.provider,
-        "stubs": total_stubs,
-        "functions_public": total_public,
-        "stub_ratio": round(ratio, 2),  # percent
-        "report": str(sjson),
-        "status": "passed",  # gate evaluation decides fail
-    }
-    return dep_metrics, stub_metrics, project_data, sdata
+    # 按要求：移除 stub 比例统计与报表
+    return dep_metrics, project_data
 
 
 # -------- helpers ---------
@@ -783,13 +768,12 @@ def _aggregate_component_tests(
     for c in comps:
         if c["deps_stub_free"]:
             dep_stub_free_components += 1
-            # Gate application logic:
-            # - If there are dependencies (dep_count > 0) and all deps are stub-free -> require tests green
-            # - If no dependencies (dep_count == 0) -> require tests green only when self has no stub
-            apply_gate = (c["dep_count"] > 0) or (c["dep_count"] == 0 and c["stubs_self"] == 0)
-            # Additional global option: if require_self_stub_free is true, always require self has no stub
-            if cfg.components.require_self_stub_free and c["stubs_self"] > 0:
-                apply_gate = False
+            # Gate 口径：当 require_self_stub_free=true 时，需要“自身无 stub 且依赖无 stub”才要求全绿；
+            # 否则仅当依赖无 stub 时要求全绿。
+            if cfg.components.require_self_stub_free:
+                apply_gate = (c["deps_stub_free"]) and (c["stubs_self"] == 0)
+            else:
+                apply_gate = c["deps_stub_free"]
             if apply_gate:
                 if c["tests_total"] == 0:
                     if not cfg.gates.allow_missing_component_tests:
@@ -1048,6 +1032,7 @@ def _ext_function_metrics(cfg: QAConfig, artifacts_dir: Path) -> tuple[int, Path
     loc_thr = int(getattr(gates, 'fn_loc_max', 0) or 0)
     args_thr = int(getattr(gates, 'fn_args_max', 0) or 0)
     nest_thr = int(getattr(gates, 'fn_nesting_max', 0) or 0)
+    count_doc = bool(getattr(gates, 'fn_count_docstrings', True))
     violations: list[dict[str, _Any]] = []
     per_file: list[dict[str, _Any]] = []
     for f in files:
@@ -1062,7 +1047,24 @@ def _ext_function_metrics(cfg: QAConfig, artifacts_dir: Path) -> tuple[int, Path
             if not _ext_is_public(name):
                 continue
             try:
-                loc = (node.end_lineno or node.lineno) - node.lineno + 1
+                start_line = node.lineno
+                if not count_doc:
+                    # 跳过函数首个 docstring 的行数
+                    body = getattr(node, 'body', []) or []
+                    if body:
+                        first = body[0]
+                        # py>=3.8: Constant
+                        is_doc = False
+                        try:
+                            import ast as _ast
+                            is_doc = isinstance(first, _ast.Expr) and isinstance(getattr(first, 'value', None), _ast.Constant) and isinstance(first.value.value, str)
+                        except Exception:
+                            is_doc = False
+                        if is_doc:
+                            end_doc = getattr(first, 'end_lineno', getattr(first, 'lineno', start_line))
+                            start_line = int(end_doc) + 1
+                end_line = (getattr(node, 'end_lineno', None) or node.lineno)
+                loc = int(end_line) - int(start_line) + 1
             except Exception:
                 loc = None
             args_cnt = len(getattr(node, 'args', None).args or []) + len(getattr(node, 'args', None).kwonlyargs or [])

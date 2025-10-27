@@ -76,9 +76,6 @@ tools:
     max_file_loc: 500
   deps:
     provider: internal
-  stubs:
-    provider: internal
-    decorator_names: ["stub"]
 
 gates:
   formatter_clean: true
@@ -87,12 +84,14 @@ gates:
   coverage_min: 80
   max_file_loc: 500
   import_violations_max: 0
-  stub_ratio_max: 0.25
+  # stub_ratio 门禁已移除
   # Optional extensions
   doc_contracts_missing_max: 0
   fn_loc_max: 50
   fn_args_max: 5
   fn_nesting_max: 3
+  # 统计函数行数时是否包含 Docstring
+  fn_count_docstrings: true
   exports_no_private: true
   components_dep_stub_free_requires_green: true
   allow_missing_component_tests: false
@@ -103,4 +102,4 @@ components:
   scope: package
   tests_dir_name: tests
   dependency_scope: transitive
-  require_self_stub_free: false
+  require_self_stub_free: true

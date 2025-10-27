@@ -139,6 +139,8 @@ class GatesSection:
     fn_loc_max: int = 50
     fn_args_max: int = 5
     fn_nesting_max: int = 3
+    # 是否将 Docstring 行计入函数行数统计
+    fn_count_docstrings: bool = True
     exports_no_private: bool = True
 
 
@@ -325,7 +327,11 @@ def load_qa_config(path: str | Path) -> QAConfig:
     cfg.gates.coverage_min = int(gates.get("coverage_min", cfg.gates.coverage_min))
     cfg.gates.max_file_loc = int(gates.get("max_file_loc", cfg.gates.max_file_loc))
     cfg.gates.import_violations_max = int(gates.get("import_violations_max", cfg.gates.import_violations_max))
-    cfg.gates.stub_ratio_max = float(gates.get("stub_ratio_max", cfg.gates.stub_ratio_max))
+    # 按要求：移除 stub 比例门禁的实际使用；保留字段以兼容旧配置
+    try:
+        _ = float(gates.get("stub_ratio_max", cfg.gates.stub_ratio_max))
+    except Exception:
+        pass
     # 可选CC/MI门禁
     cc_rank = gates.get("cc_max_rank_max", None)
     if isinstance(cc_rank, str) and cc_rank.strip():
@@ -336,7 +342,7 @@ def load_qa_config(path: str | Path) -> QAConfig:
             cfg.gates.mi_min = int(mi_min)
         except Exception:
             cfg.gates.mi_min = None
-    # 新增门禁
+    # 新增/扩展门禁
     cfg.gates.components_dep_stub_free_requires_green = bool(
         gates.get("components_dep_stub_free_requires_green", cfg.gates.components_dep_stub_free_requires_green)
     )
@@ -349,6 +355,9 @@ def load_qa_config(path: str | Path) -> QAConfig:
     cfg.gates.modules_require_named_tests = bool(
         gates.get("modules_require_named_tests", cfg.gates.modules_require_named_tests)
     )
+    # 函数度量：是否统计 Docstring 行数（默认 True）。
+    fcd = gates.get("fn_count_docstrings", cfg.gates.fn_count_docstrings)
+    cfg.gates.fn_count_docstrings = bool(fcd)
 
     # 组件配置
     comp = data.get("components") or {}
