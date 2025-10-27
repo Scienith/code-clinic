@@ -284,12 +284,12 @@ def render_stub_heatmap(
         # Tests pass/total line for modules (do not change fillcolor)
         tests_line = ""
         if node.node_type == NodeType.MODULE and test_pass_counts is not None:
-            passed, total = test_pass_counts.get(name, (None, None)) if test_pass_counts else (None, None)
-            if isinstance(passed, int) and isinstance(total, int):
-                test_color = "#2e7d32" if total > 0 and passed == total else "#c62828"
-                if total == 0:
+            t_passed, t_total = test_pass_counts.get(name, (None, None)) if test_pass_counts else (None, None)
+            if isinstance(t_passed, int) and isinstance(t_total, int):
+                test_color = "#2e7d32" if t_total > 0 and t_passed == t_total else "#c62828"
+                if t_total == 0:
                     test_color = "#c62828"
-                tests_line = f"<TR><TD>Tests: <FONT COLOR=\"{test_color}\">{passed}/{total}</FONT></TD></TR>"
+                tests_line = f"<TR><TD>Tests: <FONT COLOR=\"{test_color}\">{t_passed}/{t_total}</FONT></TD></TR>"
 
         # 进度条以完成度（1 - stub_ratio）展示
         implemented_pct = int(round((1.0 - ratio) * 100))
