@@ -309,7 +309,8 @@ def _run_mypy(cfg: QAConfig, logs_dir: Path) -> Tuple[str, str, Optional[int]]:
     if cfg.tools.typecheck.provider != "mypy":
         return ("skipped", "", None)
     log_path = logs_dir / "mypy.log"
-    args = ["mypy"] + cfg.tool.paths
+    # Run mypy via the same interpreter to ensure site-packages (incl. py.typed) from this environment are used
+    args = [sys.executable, "-m", "mypy"] + cfg.tool.paths
     if cfg.tools.typecheck.config_file:
         args += ["--config-file", cfg.tools.typecheck.config_file]
     if cfg.tools.typecheck.strict:
