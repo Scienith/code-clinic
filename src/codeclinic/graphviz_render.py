@@ -260,8 +260,8 @@ def render_stub_heatmap(
         else:
             stubs = int(node.stubs)
             total = int(node.functions_total)
-            ratio = (stubs / max(1, total)) if total else 0.0
-        pct = int(round(ratio * 100))
+            ratio = (stubs / float(total)) if total > 0 else None
+        pct_str = f"{int(round(ratio * 100))}%" if isinstance(ratio, float) else "N/A"
         
         # 使用统一的白色背景
         color = "#FFFFFF"
@@ -291,14 +291,13 @@ def render_stub_heatmap(
                     test_color = "#c62828"
                 tests_line = f"<TR><TD>Tests: <FONT COLOR=\"{test_color}\">{t_passed}/{t_total}</FONT></TD></TR>"
 
-        # 进度条以完成度（1 - stub_ratio）展示
-        implemented_pct = int(round((1.0 - ratio) * 100))
+        # 进度条以完成度（1 - stub_ratio）展示；ratio=None 时在进度条内处理成灰条
         
         # 创建HTML标签包含进度条
         label = f'''<
         <TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0">
             <TR><TD>{type_indicator} {display_name}</TD></TR>
-            <TR><TD>stub {stubs}/{max(1, total)} ({pct}%)</TD></TR>
+            <TR><TD>stub {stubs}/{total} ({pct_str})</TD></TR>
             {tests_line}
             <TR><TD>{progress_bar}</TD></TR>
         </TABLE>
@@ -332,7 +331,10 @@ def render_stub_heatmap(
     return dot_path, svg_path
 
 
-def _create_html_progress_bar(ratio: float, width: int = 120) -> str:
+from typing import Optional
+
+
+def _create_html_progress_bar(ratio: Optional[float], width: int = 120) -> str:
     """
     创建HTML表格形式的进度条，简洁显示
     
@@ -343,8 +345,11 @@ def _create_html_progress_bar(ratio: float, width: int = 120) -> str:
     Returns:
         str: HTML表格进度条
     """
-    # 计算实现比例（1 - stub_ratio）
-    completion_ratio = 1.0 - ratio
+    # 计算实现比例（1 - stub_ratio）；当 total==0 → ratio=None，用纯灰色条表示 N/A
+    if ratio is None:
+        return f'''<TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" STYLE="ROUNDED">\n            <TR>\n                <TD WIDTH="{width}" HEIGHT="14" BGCOLOR="lightgray"></TD>\n            </TR>\n        </TABLE>'''
+
+    completion_ratio = 1.0 - float(ratio)
     completion_pct = int(round(completion_ratio * 100))
     
     # 计算进度条填充宽度
