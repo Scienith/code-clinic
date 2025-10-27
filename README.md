@@ -4,9 +4,8 @@
 
 ## Install
 ```bash
-pip install codeclinic
-# or, from source (dev):
-pip install -e .
+# from GitHub main branch
+pip install git+https://github.com/Scienith/code-clinic@main
 ```
 > **Note:** Rendering SVG/PNG requires the Graphviz **system** tool (`dot`) in your PATH. macOS: `brew install graphviz`; Ubuntu: `sudo apt-get install graphviz`.
 
@@ -80,13 +79,13 @@ This prints a summary + adjacency list and writes:
 
 ## Marking stubs
 ```python
-from codeclinic import stub
+from codeclinic.stub import stub
 
 @stub
 def todo_api():
     pass
 ```
-`@stub` will (1) mark the function for static counting and (2) emit a `warnings.warn` when it’s actually called.
+`@stub` will (1) mark the function for static counting (sets `__codeclinic_stub__=True`) and (2) emit a `warnings.warn` when it’s actually called.
 
 ## Config
 You can keep settings in `pyproject.toml` under `[tool.codeclinic]` or in a `codeclinic.toml` file:
