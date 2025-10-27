@@ -387,7 +387,8 @@ def _run_internal_analyses(cfg: QAConfig, artifacts_dir: Path) -> Tuple[Dict[str
         json_data = _prepare_stub_json_data(sdata, project_data)
         (stub_dir / "stub_summary.json").write_text(json.dumps(json_data, ensure_ascii=False, indent=2), encoding="utf-8")
         # 生成热力图
-        _generate_stub_heatmap(sdata, project_data, stub_dir)
+        # 控制是否在热力图用红/绿边框标识模块测试状态
+        _generate_stub_heatmap(sdata, project_data, stub_dir, show_test_borders=cfg.visuals.show_test_status_borders)
     except Exception as e:
         # do not fail the run due to reporting errors
         _ = e

@@ -313,7 +313,8 @@ def _generate_stub_recommendations(stub_data: Dict[str, Any]) -> List[Dict[str, 
 def _generate_stub_heatmap(
     stub_data: Dict[str, Any],
     project_data: ProjectData,
-    output_dir: Path
+    output_dir: Path,
+    show_test_borders: bool = True,
 ) -> Path:
     """生成Stub热力图"""
     try:
@@ -324,30 +325,31 @@ def _generate_stub_heatmap(
         # Try to overlay per-module test status and pass counts if available
         test_status = None
         test_pass_counts = None
-        # component_tests.json is saved in artifacts root; output_dir here is stub_completeness dir
-        candidates = [output_dir / "component_tests.json", output_dir.parent / "component_tests.json"]
-        comp_json = next((p for p in candidates if p.exists()), None)
-        if comp_json:
-            try:
-                with comp_json.open('r', encoding='utf-8') as f:
-                    comp_data = json.load(f)
-                comp_list = comp_data.get("components", [])
-                test_status = {}
-                test_pass_counts = {}
-                for c in comp_list:
-                    name = c.get("name")
-                    if name not in project_data.modules:
-                        continue
-                    total = int(c.get("tests_total", 0) or 0)
-                    failed = int(c.get("tests_failed", 0) or 0)
-                    skipped = int(c.get("tests_skipped", 0) or 0)
-                    passed = max(0, total - failed)  # 不把 skipped 计为通过
-                    status = "green" if total > 0 and failed == 0 else "red"
-                    test_status[name] = status
-                    test_pass_counts[name] = (passed, total)
-            except Exception:
-                test_status = None
-                test_pass_counts = None
+        if show_test_borders:
+            # component_tests.json is saved in artifacts root; output_dir here is stub_completeness dir
+            candidates = [output_dir / "component_tests.json", output_dir.parent / "component_tests.json"]
+            comp_json = next((p for p in candidates if p.exists()), None)
+            if comp_json:
+                try:
+                    with comp_json.open('r', encoding='utf-8') as f:
+                        comp_data = json.load(f)
+                    comp_list = comp_data.get("components", [])
+                    test_status = {}
+                    test_pass_counts = {}
+                    for c in comp_list:
+                        name = c.get("name")
+                        if name not in project_data.modules:
+                            continue
+                        total = int(c.get("tests_total", 0) or 0)
+                        failed = int(c.get("tests_failed", 0) or 0)
+                        skipped = int(c.get("tests_skipped", 0) or 0)
+                        passed = max(0, total - failed)  # 不把 skipped 计为通过
+                        status = "green" if total > 0 and failed == 0 else "red"
+                        test_status[name] = status
+                        test_pass_counts[name] = (passed, total)
+                except Exception:
+                    test_status = None
+                    test_pass_counts = None
 
         render_stub_heatmap(
             project_data.nodes,

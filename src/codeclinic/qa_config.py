@@ -113,6 +113,12 @@ class ToolsSection:
     stubs: StubsCfg = field(default_factory=StubsCfg)
 
 
+
+@dataclass
+class VisualsCfg:
+    # 是否在 Stub 热力图中用边框标识模块测试状态（绿/红）
+    show_test_status_borders: bool = True
+
 @dataclass
 class GatesSection:
     formatter_clean: bool = True
@@ -158,6 +164,7 @@ class QAConfig:
     tools: ToolsSection = field(default_factory=ToolsSection)
     gates: GatesSection = field(default_factory=GatesSection)
     components: ComponentsCfg = field(default_factory=ComponentsCfg)
+    visuals: VisualsCfg = field(default_factory=VisualsCfg)
 
 
 def default_yaml() -> str:
@@ -204,6 +211,9 @@ tools:
   stubs:
     provider: internal
     decorator_names: ["stub"]
+visuals:
+  # 是否在 Stub 热力图中用边框标识模块测试状态（绿/红）
+  show_test_status_borders: true
 
 gates:
   formatter_clean: true
@@ -269,6 +279,11 @@ def load_qa_config(path: str | Path) -> QAConfig:
     junit = (tst.get("junit") or {})
     cfg.tools.tests.junit.enabled = bool(junit.get("enabled", cfg.tools.tests.junit.enabled))
     cfg.tools.tests.junit.output = junit.get("output", cfg.tools.tests.junit.output)
+
+    # visuals
+    visuals = data.get("visuals") or {}
+    if isinstance(visuals, dict):
+        cfg.visuals.show_test_status_borders = bool(visuals.get("show_test_status_borders", cfg.visuals.show_test_status_borders))
 
     cpx = tools.get("complexity") or {}
     cfg.tools.complexity.provider = cpx.get("provider", cfg.tools.complexity.provider)
