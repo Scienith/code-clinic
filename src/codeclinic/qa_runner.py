@@ -288,12 +288,13 @@ def _run_ruff_check(cfg: QAConfig, logs_dir: Path) -> Tuple[str, str, Optional[i
         if conv:
             tmp_cfg = logs_dir / "ruff_docstyle.toml"
             tmp_cfg.write_text(
-                """
+                f"""
 [tool.ruff]
 line-length = 88
 
 [tool.ruff.pydocstyle]
-convention = """.strip() + conv + "\n",
+convention = "{conv}"
+""",
                 encoding="utf-8",
             )
             args += ["--config", str(tmp_cfg)]
