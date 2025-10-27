@@ -378,12 +378,19 @@ def _run_internal_analyses(cfg: QAConfig, artifacts_dir: Path) -> Tuple[Dict[str
 
     # Stub 明细报表：仅生成每模块/包的明细与热力图，不产出项目级聚合与门禁
     try:
-        from .stub_analysis import analyze_stub_completeness
-        from .stub_report import save_stub_report
+        from .stub_analysis import analyze_stub_completeness, _generate_stub_heatmap, _prepare_stub_json_data
         sdata = analyze_stub_completeness(project_data)
-        _ = save_stub_report(sdata, project_data, artifacts_dir)
-    except Exception:
-        pass
+        # 写明细 JSON
+        stub_dir = artifacts_dir / "stub_completeness"
+        stub_dir.mkdir(parents=True, exist_ok=True)
+        json_path = stub_dir / "stub_summary.json"
+        json_data = _prepare_stub_json_data(sdata, project_data)
+        (stub_dir / "stub_summary.json").write_text(json.dumps(json_data, ensure_ascii=False, indent=2), encoding="utf-8")
+        # 生成热力图
+        _generate_stub_heatmap(sdata, project_data, stub_dir)
+    except Exception as e:
+        # do not fail the run due to reporting errors
+        _ = e
     return dep_metrics, project_data
 
 
