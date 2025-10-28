@@ -141,6 +141,8 @@ class GatesSection:
     packages_require_dunder_init: bool = True
     # 新增：每个包内模块是否必须有命名规范 tests/test_<module>.py（仅对包内 .py 文件生效）
     modules_require_named_tests: bool = True
+    # 新增：按 glob 模式排除不检查命名测试的模块列表（相对/绝对路径均可，使用 fnmatch）
+    modules_named_tests_exclude: List[str] = field(default_factory=list)
     doc_contracts_missing_max: int = 0
     fn_loc_max: int = 50
     fn_args_max: int = 5
@@ -229,6 +231,8 @@ gates:
   allow_missing_component_tests: false
   packages_require_dunder_init: true
   modules_require_named_tests: true
+  # 可选：对某些模块跳过“命名测试文件存在性”检查（glob 模式列表）
+  modules_named_tests_exclude: []
 
 components:
   scope: package                # package | module
@@ -370,6 +374,10 @@ def load_qa_config(path: str | Path) -> QAConfig:
     cfg.gates.modules_require_named_tests = bool(
         gates.get("modules_require_named_tests", cfg.gates.modules_require_named_tests)
     )
+    # 解析排除列表
+    mte = gates.get("modules_named_tests_exclude", cfg.gates.modules_named_tests_exclude)
+    if isinstance(mte, list):
+        cfg.gates.modules_named_tests_exclude = [str(x) for x in mte]
     # 函数度量：是否统计 Docstring 行数（默认 True）。
     fcd = gates.get("fn_count_docstrings", cfg.gates.fn_count_docstrings)
     cfg.gates.fn_count_docstrings = bool(fcd)

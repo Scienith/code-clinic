@@ -841,12 +841,28 @@ def _check_modules_require_named_tests(cfg: QAConfig, project_data: Any) -> Tupl
     Only applies to modules inside packages (i.e., node.parent is not None)."""
     missing: List[str] = []
     tests_dir_name = cfg.components.tests_dir_name
+    import fnmatch
+    excludes = list(getattr(cfg.gates, 'modules_named_tests_exclude', []) or [])
     for name, node in project_data.modules.items():
         # Skip top-level modules (not inside package)
         if not getattr(node, "parent", None):
             continue
         mod_path = Path(node.file_path)
         if mod_path.name == "__init__.py":
+            continue
+        # Exclude by glob patterns (supports absolute or relative-like matching)
+        path_str = str(mod_path)
+        rel_str = path_str
+        try:
+            # best-effort relative to CWD
+            rel_str = str(mod_path.relative_to(Path.cwd()))
+        except Exception:
+            pass
+        skip = any(
+            fnmatch.fnmatch(path_str, pat) or fnmatch.fnmatch(rel_str, pat)
+            for pat in excludes
+        )
+        if skip:
             continue
         tests_dir = mod_path.parent / tests_dir_name
         expected = tests_dir / f"test_{mod_path.stem}.py"
