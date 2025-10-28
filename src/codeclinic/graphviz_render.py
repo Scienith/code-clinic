@@ -165,9 +165,9 @@ def render_violations_tree_graph(
 ) -> Tuple[str, str]:
     """
     渲染基于“包+模块”的树形依赖图：
-    - 仅展示导入依赖关系；不再绘制文件夹父子（包含）关系或虚拟根节点
+    - 先用 NodeInfo.parent/child_edges 绘制包含关系（灰色虚线），体现目录/包结构
+    - 再叠加导入依赖连线：绿色=合法，红色=违规（不影响树布局，constraint=false）
     - 节点：📦=package，📄=module
-    - 叠加依赖连线：绿色=合法，红色=违规（保持不影响布局 constraint=false）
     """
     dot = Digraph(
         "violations_tree",
@@ -184,9 +184,20 @@ def render_violations_tree_graph(
         label = f"{icon} {display_name}\n{kind}"
         dot.node(name, label=label, fillcolor="#FFFFFF", shape="box", style="rounded,filled")
 
-    # 不绘制任何“包含”关系，仅叠加导入依赖边
+    # 先绘制包含关系（灰色虚线），用 NodeInfo.parent 与可选 child_edges 补充
+    added_tree_edges: Set[Tuple[str, str]] = set()
+    for name, node in nodes.items():
+        parent = getattr(node, 'parent', None)
+        if parent and parent in nodes:
+            dot.edge(parent, name, color="#DDDDDD", style="dashed", penwidth="1", constraint="true")
+            added_tree_edges.add((parent, name))
+    if child_edges:
+        for parent, child in sorted(child_edges):
+            if parent in nodes and child in nodes and (parent, child) not in added_tree_edges:
+                dot.edge(parent, child, color="#DDDDDD", style="dashed", penwidth="1", constraint="true")
+                added_tree_edges.add((parent, child))
 
-    # 叠加依赖边：模块/包之间的直接依赖（不聚合，保留粒度）
+    # 再叠加依赖边：模块/包之间的直接依赖（不聚合，保留粒度）
     for src, dst in sorted(legal_edges):
         if src in nodes and dst in nodes:
             dot.edge(src, dst, color="#4CAF50", style="solid", penwidth="2", constraint="false")
