@@ -17,12 +17,12 @@
 
 ## QA Facade
 - Unified quality gates via `codeclinic qa ...`:
-  - Init: `codeclinic qa init [--pre-commit --github-actions --makefile]`
+  - Init: `codeclinic qa init`
   - Run checks: `codeclinic qa run`
   - Auto-fix: `codeclinic qa fix`
 - Outputs in `build/codeclinic/`:
   - `summary.json`, `logs/`, and `artifacts/` (coverage.xml, complexity.json, report.html, import_violations/, stub_completeness/)
-- Gates: formatter, linter, mypy, coverage, max_file_loc, import_violations, stub_ratio. All required tools are installed with this package.
+- Gates: formatter, linter, mypy, coverage, max_file_loc, import_violations. All required tools are installed with this package.
 
 ## Coding Style & Naming Conventions
 - Follow PEP 8; 4‑space indentation; include type hints where practical.

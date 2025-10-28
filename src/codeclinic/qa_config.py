@@ -228,7 +228,6 @@ gates:
   coverage_min: 80
   max_file_loc: 500
   import_violations_max: 0
-  stub_ratio_max: 0.25
   # cc_max_rank_max: "C"   # 可选：不允许出现比该等级更差的圈复杂度（A最好、F最差）
   # mi_min: 70             # 可选：不允许文件MI低于该值（0-100）
   components_dep_stub_free_requires_green: true

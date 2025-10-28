@@ -13,8 +13,8 @@ pip install git+https://github.com/Scienith/code-clinic@main
 CodeClinic ships with a QA facade that unifies formatting, linting, type checks, tests/coverage, complexity, and internal import/stub analysis behind a single command.
 
 Commands
-- Initialize config and optional scaffolding:
-  - `codeclinic qa init [--pre-commit --github-actions --makefile]`
+- Initialize config:
+  - `codeclinic qa init`
 - Run checks (no auto-fix):
   - `codeclinic qa run`
 - Auto-fix format/lint issues only:
@@ -30,10 +30,12 @@ Outputs (default `build/codeclinic/`)
   - `stub_completeness/stub_summary.json`
 
 Gates (configurable in `codeclinic.yaml`)
-- `formatter_clean`, `linter_errors_max`, `mypy_errors_max`, `coverage_min`, `max_file_loc`, `import_violations_max`, `stub_ratio_max`
+- `formatter_clean`, `linter_errors_max`, `mypy_errors_max`, `coverage_min`, `max_file_loc`, `import_violations_max`
 - Optional complexity gates (radon-based): `cc_max_rank_max` (A–F) and `mi_min` (0–100)
 
 All QA provider tools (black, ruff, mypy, pytest, coverage, radon, pyyaml) are installed with CodeClinic and expected to be present.
+
+Note: CodeClinic treats `codeclinic.yaml` as the single source of truth for QA configuration. It generates ephemeral tool configs during execution and does not scaffold pre-commit/GitHub Actions/Makefile.
 
 ### Detect Long Files (LOC gate)
 - Set threshold in `codeclinic.yaml`:

@@ -21,9 +21,6 @@ def qa_cli_main(argv: list[str] | None = None) -> None:
 
     p_init = sub.add_parser("init", help="Generate QA configuration (codeclinic.yaml)")
     p_init.add_argument("--force", action="store_true", help="Overwrite existing codeclinic.yaml if present")
-    p_init.add_argument("--pre-commit", action="store_true", help="Also scaffold .pre-commit-config.yaml")
-    p_init.add_argument("--github-actions", action="store_true", help="Also scaffold GitHub Actions workflow")
-    p_init.add_argument("--makefile", action="store_true", help="Also scaffold a simple Makefile")
 
     p_run = sub.add_parser("run", help="Run QA checks (no auto-fix)")
     p_run.add_argument("--config", default="codeclinic.yaml", help="Path to QA config (YAML)")
@@ -41,7 +38,7 @@ def qa_cli_main(argv: list[str] | None = None) -> None:
     # Lazy import to keep base CLI import time minimal
     if args.qa_cmd == "init":
         from .qa_runner import qa_init
-        qa_init(force=args.force, pre_commit=args.pre_commit, github_actions=args.github_actions, makefile=args.makefile)
+        qa_init(force=args.force)
         return
 
     if args.qa_cmd == "run":

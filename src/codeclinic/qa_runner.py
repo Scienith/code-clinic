@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from .qa_config import QAConfig, load_qa_config, write_qa_config
 
 
-def qa_init(force: bool = False, pre_commit: bool = False, github_actions: bool = False, makefile: bool = False) -> None:
+def qa_init(force: bool = False) -> None:
     target = write_qa_config("codeclinic.yaml", force=force)
     if target.name.endswith(".qa.example.yaml"):
         print(f"⚠ 检测到已有 codeclinic.yaml，示例已生成: {target}")
@@ -20,15 +20,7 @@ def qa_init(force: bool = False, pre_commit: bool = False, github_actions: bool 
     else:
         print(f"✓ 已生成 QA 配置: {target}")
 
-    if pre_commit:
-        p = _write_pre_commit()
-        print(f"✓ 已生成 pre-commit 配置: {p}")
-    if github_actions:
-        p = _write_github_actions()
-        print(f"✓ 已生成 GitHub Actions 工作流: {p}")
-    if makefile:
-        p = _write_makefile()
-        print(f"✓ 已生成 Makefile: {p}")
+    # No extra scaffolding (GitHub Actions/Makefile) provided by CodeClinic
 
 
 def qa_run(config_path: str = "codeclinic.yaml", output_override: Optional[str] = None) -> int:
@@ -246,12 +238,38 @@ def qa_fix(config_path: str = "codeclinic.yaml") -> int:
 
     # Only auto-fix providers
     codes: List[int] = []
-    code, _ = _call(
-        ["black", f"--line-length={cfg.tools.formatter.line_length}"] + cfg.tool.paths
-    )
+    # black (single-source): use ephemeral config to avoid repo-level configs
+    logs_dir = Path(cfg.tool.output) / "logs"
+    try:
+        logs_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    black_cfg = logs_dir / "black.generated.toml"
+    try:
+        black_cfg.write_text("[tool.black]\n" f"line-length = {cfg.tools.formatter.line_length}\n", encoding="utf-8")
+    except Exception:
+        pass
+    black_args = ["black", "--config", str(black_cfg), f"--line-length={cfg.tools.formatter.line_length}"] + cfg.tool.paths
+    code, _ = _call(black_args)
     codes.append(code)
 
-    ruff_args = ["ruff", "check", "--fix"]
+    # ruff (single-source): ephemeral config
+    ruff_cfg = logs_dir / "ruff.generated.toml"
+    try:
+        content = [
+            f"line-length = {cfg.tools.linter.line_length}",
+        ]
+        conv = getattr(cfg.tools.linter, 'docstyle_convention', None)
+        if conv:
+            content += ["[lint.pydocstyle]", f"convention = \"{conv}\""]
+        ruff_cfg.write_text("\n".join(content) + "\n", encoding="utf-8")
+    except Exception:
+        pass
+    ruff_args = ["ruff", "check", "--config", str(ruff_cfg), "--fix"]
+    if cfg.tools.linter.ruleset:
+        for r in cfg.tools.linter.ruleset:
+            ruff_args += ["--select", r]
+    ruff_args += [f"--line-length={cfg.tools.linter.line_length}"]
     if cfg.tools.linter.unsafe_fixes:
         ruff_args.append("--unsafe-fixes")
     ruff_args += cfg.tool.paths
@@ -269,7 +287,23 @@ def _run_black_check(cfg: QAConfig, logs_dir: Path) -> Tuple[str, str, bool]:
     if cfg.tools.formatter.provider != "black":
         return ("skipped", "", True)
     log_path = logs_dir / "black.log"
-    args = ["black", "--check", f"--line-length={cfg.tools.formatter.line_length}"] + cfg.tool.paths
+    # Ephemeral Black config to avoid picking up repo-level config files
+    black_cfg = logs_dir / "black.generated.toml"
+    try:
+        black_cfg.write_text(
+            "[tool.black]\n" f"line-length = {cfg.tools.formatter.line_length}\n",
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+    args = [
+        "black",
+        "--check",
+        "--config",
+        str(black_cfg),
+        f"--line-length={cfg.tools.formatter.line_length}",
+        *cfg.tool.paths,
+    ]
     code, out = _call(args)
     log_path.write_text(out, encoding="utf-8")
     return ("passed" if code == 0 else "failed", str(log_path), code == 0)
@@ -279,27 +313,27 @@ def _run_ruff_check(cfg: QAConfig, logs_dir: Path) -> Tuple[str, str, Optional[i
     if cfg.tools.linter.provider != "ruff":
         return ("skipped", "", None)
     log_path = logs_dir / "ruff.log"
-    args = ["ruff", "check"] + cfg.tool.paths
-    # line length and selected rules
+    # Build an ephemeral Ruff config to enforce single-source settings
+    ruff_cfg = logs_dir / "ruff.generated.toml"
+    try:
+        lines = [
+            f"line-length = {cfg.tools.linter.line_length}",
+        ]
+        conv = getattr(cfg.tools.linter, 'docstyle_convention', None)
+        if conv:
+            lines += [
+                "[lint.pydocstyle]",
+                f"convention = \"{conv}\"",
+            ]
+        ruff_cfg.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except Exception:
+        pass
+    args = ["ruff", "check", "--config", str(ruff_cfg)]
     if cfg.tools.linter.ruleset:
         for r in cfg.tools.linter.ruleset:
             args += ["--select", r]
     args += [f"--line-length={cfg.tools.linter.line_length}"]
-    # Optional: docstring convention via a temporary ruff config
-    try:
-        conv = getattr(cfg.tools.linter, 'docstyle_convention', None)
-        if conv:
-            tmp_cfg = logs_dir / "ruff_docstyle.toml"
-            # Standalone ruff config (not pyproject): use top-level keys and [lint.pydocstyle]
-            content = (
-                f"line-length = {cfg.tools.linter.line_length}\n"
-                f"[lint.pydocstyle]\n"
-                f"convention = \"{conv}\"\n"
-            )
-            tmp_cfg.write_text(content, encoding="utf-8")
-            args += ["--config", str(tmp_cfg)]
-    except Exception:
-        pass
+    args += cfg.tool.paths
     code, out = _call(args)
     log_path.write_text(out, encoding="utf-8")
     errors = _count_ruff_issues(out) if code != 0 else 0
@@ -312,8 +346,30 @@ def _run_mypy(cfg: QAConfig, logs_dir: Path) -> Tuple[str, str, Optional[int]]:
     log_path = logs_dir / "mypy.log"
     # Run mypy via the same interpreter to ensure site-packages (incl. py.typed) from this environment are used
     args = [sys.executable, "-m", "mypy"] + cfg.tool.paths
-    if cfg.tools.typecheck.config_file:
-        args += ["--config-file", cfg.tools.typecheck.config_file]
+    # Always use an ephemeral mypy config to avoid picking up repo-level configs
+    mypy_cfg = logs_dir / "mypy.generated.ini"
+    try:
+        strict = bool(getattr(cfg.tools.typecheck, 'strict', True))
+        base = [
+            "[mypy]",
+            "pretty = True",
+            "show_error_codes = True",
+            "namespace_packages = True",
+        ]
+        if strict:
+            base += [
+                "disallow_untyped_defs = True",
+                "disallow_incomplete_defs = True",
+                "no_implicit_optional = True",
+                "warn_redundant_casts = True",
+                "warn_unused_ignores = True",
+                "warn_return_any = True",
+                "check_untyped_defs = True",
+            ]
+        mypy_cfg.write_text("\n".join(base) + "\n", encoding="utf-8")
+    except Exception:
+        pass
+    args += ["--config-file", str(mypy_cfg)]
     if cfg.tools.typecheck.strict:
         args.append("--strict")
     code, out = _call(args)
@@ -338,12 +394,52 @@ def _run_pytest_coverage(cfg: QAConfig, logs_dir: Path, artifacts_dir: Path, out
         junit_xml_path.parent.mkdir(parents=True, exist_ok=True)
     # Run tests
     # Use the current interpreter to guarantee the same venv/site-packages
-    pytest_cmd = [sys.executable, "-m", "coverage", "run", "-m", "pytest", *cfg.tools.tests.args]
+    # Generate an ephemeral coverage config from codeclinic.yaml settings (single-source)
+    cov_rc = logs_dir / "coveragerc.generated"
+    try:
+        excl_patterns = list(cfg.tool.exclude or [])
+        # Always omit tests/ and virtualenv caches if not already present
+        defaults = ["**/tests/**", "**/.venv/**", "**/venv/**", "**/__pycache__/**"]
+        for d in defaults:
+            if d not in excl_patterns:
+                excl_patterns.append(d)
+        # Convert globs to coverage omit-style patterns (keep as-is)
+        lines = ["[run]", "branch = True", "source = "]
+        for p in cfg.tool.paths:
+            lines.append(f"    {p}")
+        lines += ["omit ="]
+        for pat in excl_patterns:
+            lines.append(f"    {pat}")
+        cov_rc.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except Exception:
+        # best-effort; fallback to defaults
+        pass
+
+    # Ephemeral pytest.ini to avoid picking up repo-level pytest config
+    pytest_cfg = logs_dir / "pytest.generated.ini"
+    try:
+        pytest_cfg.write_text("[pytest]\n", encoding="utf-8")
+    except Exception:
+        pass
+    pytest_cmd = [
+        sys.executable,
+        "-m",
+        "coverage",
+        "run",
+        "--rcfile",
+        str(cov_rc),
+        "-m",
+        "pytest",
+        "-c",
+        str(pytest_cfg),
+        *cfg.tools.tests.args,
+    ]
     if junit_xml_path is not None:
         pytest_cmd += ["--junitxml", str(junit_xml_path)]
     code_run, out_run = _call(pytest_cmd)
     # Produce coverage xml regardless of test status to capture partial results
-    _ = _call(["coverage", "xml", "-o", str(cov_xml)])[0]
+    cov_xml_cmd = ["coverage", "xml", "-o", str(cov_xml), "--rcfile", str(cov_rc)]
+    _ = _call(cov_xml_cmd)[0]
     cov_pct = _parse_coverage_percent(cov_xml) if cov_xml.exists() else None
     combined = out_run
     log_path.write_text(combined, encoding="utf-8")
@@ -1011,24 +1107,10 @@ th,td{{border:1px solid #ccc; padding:6px 8px; text-align:left;}}
     html_path.write_text(html, encoding="utf-8")
 
 
-def _write_pre_commit() -> Path:
-    p = Path(".pre-commit-config.yaml")
-    content = """
-repos:
-  - repo: https://github.com/psf/black
-    rev: 23.7.0
-    hooks:
-      - id: black
-        args: ["--line-length=88"]
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.6.8
-    hooks:
-      - id: ruff
-        args: ["--fix"]
-      - id: ruff-format
-""".lstrip()
-    p.write_text(content, encoding="utf-8")
-    return p
+# pre-commit scaffolding intentionally not provided by CodeClinic
+
+
+# Removed per-tool persistent config scaffolding to enforce single-source (codeclinic.yaml)
 
 
 # -------- extensions: function metrics / doc contracts / exports ---------
@@ -1242,57 +1324,6 @@ def _ext_exports_require_nonempty_all(cfg: QAConfig, artifacts_dir: Path) -> tup
     return len(missing), report
 
 
-def _write_github_actions() -> Path:
-    wf_dir = Path(".github/workflows")
-    wf_dir.mkdir(parents=True, exist_ok=True)
-    p = wf_dir / "codeclinic-qa.yml"
-    content = """
-name: CodeClinic QA
-on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-
-jobs:
-  qa:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e .
-          pip install black ruff mypy pytest coverage radon pyyaml
-      - name: Run CodeClinic QA
-        run: |
-          codeclinic qa run
-      - name: Upload QA artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: codeclinic-qa
-          path: build/codeclinic
-""".lstrip()
-    p.write_text(content, encoding="utf-8")
-    return p
-
-
-def _write_makefile() -> Path:
-    p = Path("Makefile")
-    content = """
-.PHONY: qa-init qa-run qa-fix
-
-qa-init:
-	codeclinic qa init
-
-qa-run:
-	codeclinic qa run
-
-qa-fix:
-	codeclinic qa fix
-""".lstrip()
-    p.write_text(content, encoding="utf-8")
-    return p
+"""
+GitHub Actions and Makefile scaffolding intentionally not provided by CodeClinic.
+"""
