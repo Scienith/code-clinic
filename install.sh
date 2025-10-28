@@ -60,9 +60,25 @@ python -V || true
 
 # 3) Always install CodeClinic (GitHub main) and required tools into this venv
 echo "[INFO] Installing CodeClinic (main) and quality tools into .venv"
-pip install -q --upgrade pip
+pip install -q --upgrade pip setuptools wheel
 pip install -q "git+https://github.com/Scienith/code-clinic@main" \
   black ruff mypy pytest coverage radon pyyaml
+
+# 3b) Install target project itself into this venv for stable imports/mypy
+if [[ -f "$DEST/pyproject.toml" || -f "$DEST/setup.cfg" || -f "$DEST/setup.py" ]]; then
+  echo "[INFO] Installing target project in editable mode (-e .)"
+  (
+    cd "$DEST"
+    # Prefer dev extras if declared via [project.optional-dependencies].dev
+    if rg -q "\[project\.optional-dependencies\]" pyproject.toml 2>/dev/null && rg -n "^dev\s*=\s*\[" pyproject.toml >/dev/null 2>&1; then
+      pip install -q -e .[dev] || pip install -q -e .
+    else
+      pip install -q -e .
+    fi
+  )
+else
+  echo "[WARN] No project metadata found in $DEST (missing pyproject.toml/setup.cfg/setup.py); skip 'pip install -e .'"
+fi
 
 # 4) Create codeclinic/ directory and wrapper
 CC_DIR="$DEST/codeclinic"
@@ -161,7 +177,7 @@ junit = tests.setdefault('junit', {})
 junit['enabled'] = True
 junit['output'] = 'codeclinic/results/artifacts/junit.xml'
 p.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding='utf-8')
-print('[INFO] Updated codeclinic.yaml: tool.output=results, tool.paths=%s' % tool['paths'])
+print(f"[INFO] Updated codeclinic.yaml: tool.output={tool.get('output')}, tool.paths={tool.get('paths')}")
 PY
 
 echo "[DONE] CodeClinic installed. Next steps:"

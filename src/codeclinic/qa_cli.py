@@ -11,23 +11,35 @@ Kept separate from the legacy CLI to avoid breaking existing flags.
 """
 from __future__ import annotations
 
-import sys
 import argparse
+import sys
 
 
 def qa_cli_main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(prog="codeclinic qa", description="Quality gates facade")
+    parser = argparse.ArgumentParser(
+        prog="codeclinic qa", description="Quality gates facade"
+    )
     sub = parser.add_subparsers(dest="qa_cmd")
 
     p_init = sub.add_parser("init", help="Generate QA configuration (codeclinic.yaml)")
-    p_init.add_argument("--force", action="store_true", help="Overwrite existing codeclinic.yaml if present")
+    p_init.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing codeclinic.yaml if present",
+    )
 
     p_run = sub.add_parser("run", help="Run QA checks (no auto-fix)")
-    p_run.add_argument("--config", default="codeclinic.yaml", help="Path to QA config (YAML)")
-    p_run.add_argument("--output", default=None, help="Override output directory (default from config)")
+    p_run.add_argument(
+        "--config", default="codeclinic.yaml", help="Path to QA config (YAML)"
+    )
+    p_run.add_argument(
+        "--output", default=None, help="Override output directory (default from config)"
+    )
 
     p_fix = sub.add_parser("fix", help="Auto-fix format/lint issues only")
-    p_fix.add_argument("--config", default="codeclinic.yaml", help="Path to QA config (YAML)")
+    p_fix.add_argument(
+        "--config", default="codeclinic.yaml", help="Path to QA config (YAML)"
+    )
 
     args = parser.parse_args(argv)
 
@@ -38,15 +50,18 @@ def qa_cli_main(argv: list[str] | None = None) -> None:
     # Lazy import to keep base CLI import time minimal
     if args.qa_cmd == "init":
         from .qa_runner import qa_init
+
         qa_init(force=args.force)
         return
 
     if args.qa_cmd == "run":
         from .qa_runner import qa_run
+
         exit_code = qa_run(config_path=args.config, output_override=args.output)
         sys.exit(exit_code)
 
     if args.qa_cmd == "fix":
         from .qa_runner import qa_fix
+
         exit_code = qa_fix(config_path=args.config)
         sys.exit(exit_code)

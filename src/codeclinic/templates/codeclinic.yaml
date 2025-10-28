@@ -68,6 +68,8 @@ gates:
     ruleset: ["E","F","I","B","D"]
     # 文档字符串风格（可选：google/numpy/pep257）
     docstyle_convention: "google"
+    # Ruff 忽略规则代码（默认忽略 D415：首行句末标点，便于中文“。”）
+    ignore: ["D415"]
     # Lint 错误上限（超过则门禁失败）
     errors_max: 0
 
@@ -75,6 +77,20 @@ gates:
   typecheck:
     # 严格模式（建议 true）
     strict: true
+    # 跳过对第三方库类型缺失的校验（mypy 按模块/包忽略 missing imports）
+    # 示例：根据项目实际三方依赖按需调整
+    ignore_missing_imports: [
+      "codeclinic.*",
+      "numpy",
+      "pandas",
+      "sklearn.*",
+      "scienith_visualization.*",
+      "scienith_i18n.*",
+      "utilities.*",
+      "deepdiff",
+      "ml_dataset.*",
+      "html_report.*",
+    ]
     # 类型检查错误上限（超过则门禁失败）
     errors_max: 0
 
@@ -143,8 +159,13 @@ gates:
 
   # Fail-Fast 禁止与豁免
   failfast:
+    # Aggressive bans: any usage of dict.get/getattr (allow inline override via tags)
+    forbid_dict_get_any: true
+    forbid_getattr_any: true
+    # Backward-compat flags (still honored if set)
     forbid_dict_get_default: true
     forbid_getattr_default: true
+    forbid_hasattr: true
     forbid_env_default: true
     forbid_import_fallback: true
     allow_comment_tags: ["allow fallback", "codeclinic: allow-fallback"]

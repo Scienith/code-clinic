@@ -1,7 +1,8 @@
 from __future__ import annotations
+
 import functools
 import warnings
-from typing import Callable, TypeVar, Any, cast
+from typing import Any, Callable, TypeVar, cast
 
 F = TypeVar("F", bound=Callable[..., Any])
 
