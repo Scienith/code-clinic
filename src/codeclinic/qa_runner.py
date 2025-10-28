@@ -290,16 +290,13 @@ def _run_ruff_check(cfg: QAConfig, logs_dir: Path) -> Tuple[str, str, Optional[i
         conv = getattr(cfg.tools.linter, 'docstyle_convention', None)
         if conv:
             tmp_cfg = logs_dir / "ruff_docstyle.toml"
-            tmp_cfg.write_text(
-                f"""
-[tool.ruff]
-line-length = 88
-
-[tool.ruff.pydocstyle]
-convention = "{conv}"
-""",
-                encoding="utf-8",
+            # Standalone ruff config (not pyproject): use top-level keys and [lint.pydocstyle]
+            content = (
+                f"line-length = {cfg.tools.linter.line_length}\n"
+                f"[lint.pydocstyle]\n"
+                f"convention = \"{conv}\"\n"
             )
+            tmp_cfg.write_text(content, encoding="utf-8")
             args += ["--config", str(tmp_cfg)]
     except Exception:
         pass
