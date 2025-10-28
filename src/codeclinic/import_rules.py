@@ -63,7 +63,35 @@ class ImportRuleChecker:
             if v:
                 return v
 
-        # 2) 基于矩阵的显式允许/禁止规则（唯一决策来源）
+        # 2) 可选：要求聚合门面导入（仅对“包自身 -> 其后代”生效）
+        if getattr(self.rules, 'require_via_aggregator', False) and from_node.node_type == NodeType.PACKAGE:
+            src = from_node.name
+            dst = to_node.name
+            if dst.startswith(src + '.'):
+                # 计算相对深度（src 之后的点个数 + 1）
+                rel = dst[len(src) + 1:]
+                depth = 1 if rel and '.' not in rel else (rel.count('.') + 1 if rel else 0)
+                # 允许的最大相对深度：1（直接子包）+ allowed_external_depth
+                try:
+                    allowed = int(getattr(self.rules, 'allowed_external_depth', 0) or 0) + 1
+                except Exception:
+                    allowed = 1
+                # 白名单优先
+                wl = list(getattr(self.rules, 'aggregator_whitelist', []) or [])
+                is_whitelisted = any(fnmatch.fnmatch(dst, pat) for pat in wl)
+                if not is_whitelisted and depth > allowed:
+                    return ImportViolation(
+                        from_node=from_node.name,
+                        to_node=to_node.name,
+                        violation_type="require_via_aggregator",
+                        message=(
+                            f"{from_node.name} 仅允许通过直接子包门面导入其后代；实际为 {to_node.name}. "
+                            f"如需使用更深层模块，请先在子包 __init__ 暴露，再从子包聚合导入。"
+                        ),
+                        severity="error",
+                    )
+
+        # 3) 基于矩阵的显式允许/禁止规则（唯一决策来源）
         matrix_decision = self._check_matrix_rules(from_node.name, to_node.name)
         if matrix_decision == "deny":
             return ImportViolation(
@@ -75,7 +103,7 @@ class ImportRuleChecker:
             )
         if matrix_decision == "allow":
             return None
-        # 3) 未命中时按 matrix_default 决策
+        # 4) 未命中时按 matrix_default 决策
         if str(getattr(self.rules, 'matrix_default', 'deny')).lower() == 'allow':
             return None
         return ImportViolation(
