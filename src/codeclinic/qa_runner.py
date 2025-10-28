@@ -337,7 +337,8 @@ def _run_pytest_coverage(cfg: QAConfig, logs_dir: Path, artifacts_dir: Path, out
         junit_xml_path = raw if raw.is_absolute() else raw
         junit_xml_path.parent.mkdir(parents=True, exist_ok=True)
     # Run tests
-    pytest_cmd = ["coverage", "run", "-m", "pytest", *cfg.tools.tests.args]
+    # Use the current interpreter to guarantee the same venv/site-packages
+    pytest_cmd = [sys.executable, "-m", "coverage", "run", "-m", "pytest", *cfg.tools.tests.args]
     if junit_xml_path is not None:
         pytest_cmd += ["--junitxml", str(junit_xml_path)]
     code_run, out_run = _call(pytest_cmd)
