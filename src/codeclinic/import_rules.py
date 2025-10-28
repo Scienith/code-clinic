@@ -314,6 +314,19 @@ def check_import_violations(project_data: ProjectData) -> List[ImportViolation]:
         fpm = rules_config.get('forbid_private_modules')
         if isinstance(fpm, bool):
             rules_obj.forbid_private_modules = fpm
+        # aggregator-related switches when provided via dict
+        rva = rules_config.get('require_via_aggregator')
+        if isinstance(rva, bool):
+            rules_obj.require_via_aggregator = rva
+        try:
+            aed = rules_config.get('allowed_external_depth', None)
+            if aed is not None:
+                rules_obj.allowed_external_depth = int(aed)
+        except Exception:
+            pass
+        awl = rules_config.get('aggregator_whitelist')
+        if isinstance(awl, list):
+            rules_obj.aggregator_whitelist = [str(x) for x in awl]
         # schema（命名集合）
         sc = rules_config.get('schema')
         if isinstance(sc, dict):
