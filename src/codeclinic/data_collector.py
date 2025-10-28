@@ -249,13 +249,45 @@ def _analyze_node_imports(node: NodeInfo, all_nodes: Dict[str, NodeInfo]) -> Non
                 imports.add(alias.name)
         
         def visit_ImportFrom(self, node_ast: ast.ImportFrom) -> None:
+            # 处理相对导入：根据 level 计算基包
+            try:
+                level = int(getattr(node_ast, 'level', 0) or 0)
+            except Exception:
+                level = 0
+
+            # 当前节点所在的“容器包”
+            curr_name = node.name
+            curr_parts = curr_name.split('.') if curr_name else []
+            from .node_types import NodeType as _NT
+            is_module = (getattr(node, 'node_type', None) == _NT.MODULE)
+            # 模块 -> 去掉末段得到包含它的包；包节点 -> 自身即为容器
+            container_parts = curr_parts[:-1] if (is_module and len(curr_parts) > 1) else curr_parts
+            # 相对导入基准：单个点(level=1) 指向“容器包本身”；多于一个点则继续向上回退
+            if level <= 0:
+                base_parts = container_parts
+            elif level == 1:
+                base_parts = container_parts
+            else:
+                base_parts = container_parts[: -(level - 1)] if (level - 1) <= len(container_parts) else []
+
             if node_ast.module:
-                imports.add(node_ast.module)
+                tail_parts = node_ast.module.split('.') if node_ast.module else []
+                abs_mod = '.'.join([p for p in (*base_parts, *tail_parts) if p])
+                if abs_mod:
+                    imports.add(abs_mod)
                 # 也添加具体导入，可能是子模块
                 for alias in node_ast.names:
                     if alias.name != '*':
-                        full_name = f"{node_ast.module}.{alias.name}"
-                        imports.add(full_name)
+                        full_name = '.'.join([p for p in (*base_parts, *tail_parts, alias.name) if p])
+                        if full_name:
+                            imports.add(full_name)
+            else:
+                # from . import X 场景：别名即为目标
+                for alias in node_ast.names:
+                    if alias.name != '*':
+                        abs_name = '.'.join([p for p in (*base_parts, alias.name) if p])
+                        if abs_name:
+                            imports.add(abs_name)
     
     ImportVisitor().visit(tree)
     
