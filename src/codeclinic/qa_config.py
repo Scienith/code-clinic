@@ -141,6 +141,10 @@ class GatesSection:
     packages_require_dunder_init: bool = True
     # 新增：每个包内模块是否必须有命名规范 tests/test_<module>.py（仅对包内 .py 文件生效）
     modules_require_named_tests: bool = True
+    # 新增：要求包内 __init__.py 必须定义非空 __all__
+    exports_require_nonempty_all: bool = False
+    # 新增：按 glob 模式排除不检查非空 __all__ 的包 __init__.py 路径
+    exports_nonempty_all_exclude: List[str] = field(default_factory=list)
     # 新增：按 glob 模式排除不检查命名测试的模块列表（相对/绝对路径均可，使用 fnmatch）
     modules_named_tests_exclude: List[str] = field(default_factory=list)
     doc_contracts_missing_max: int = 0
@@ -231,6 +235,9 @@ gates:
   allow_missing_component_tests: false
   packages_require_dunder_init: true
   modules_require_named_tests: true
+  # __init__.py 必须定义非空 __all__（可配合 excludes）
+  exports_require_nonempty_all: false
+  exports_nonempty_all_exclude: []
   # 可选：对某些模块跳过“命名测试文件存在性”检查（glob 模式列表）
   modules_named_tests_exclude: []
 
@@ -374,6 +381,13 @@ def load_qa_config(path: str | Path) -> QAConfig:
     cfg.gates.modules_require_named_tests = bool(
         gates.get("modules_require_named_tests", cfg.gates.modules_require_named_tests)
     )
+    # __all__ 非空门禁
+    cfg.gates.exports_require_nonempty_all = bool(
+        gates.get("exports_require_nonempty_all", cfg.gates.exports_require_nonempty_all)
+    )
+    ex_all = gates.get("exports_nonempty_all_exclude", cfg.gates.exports_nonempty_all_exclude)
+    if isinstance(ex_all, list):
+        cfg.gates.exports_nonempty_all_exclude = [str(x) for x in ex_all]
     # 解析排除列表
     mte = gates.get("modules_named_tests_exclude", cfg.gates.modules_named_tests_exclude)
     if isinstance(mte, list):

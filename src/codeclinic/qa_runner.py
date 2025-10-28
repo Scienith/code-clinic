@@ -121,6 +121,7 @@ def qa_run(config_path: str = "codeclinic.yaml", output_override: Optional[str] 
     fn_over_count, fn_report = _ext_function_metrics(cfg, artifacts_dir)
     stub_missing_count, docs_report = _ext_doc_contracts(cfg, artifacts_dir)
     private_exports_count, exports_report = _ext_exports(cfg, artifacts_dir)
+    missing_nonempty_all_count, exports_all_report = _ext_exports_require_nonempty_all(cfg, artifacts_dir)
     results.setdefault("metrics", {})["function_metrics_ext"] = {
         "violations": fn_over_count,
         "report": str(fn_report) if fn_report else None,
@@ -133,7 +134,9 @@ def qa_run(config_path: str = "codeclinic.yaml", output_override: Optional[str] 
     }
     results["metrics"]["exports_ext"] = {
         "private_exports": private_exports_count,
+        "missing_nonempty_all": missing_nonempty_all_count,
         "report": str(exports_report) if exports_report else None,
+        "report_all": str(exports_all_report) if exports_all_report else None,
         "status": "passed" if private_exports_count == 0 else "failed",
     }
 
@@ -219,6 +222,8 @@ def qa_run(config_path: str = "codeclinic.yaml", output_override: Optional[str] 
             gates_failed.append('function_metrics_over_threshold')
     if bool(getattr(g, 'exports_no_private', False)) and private_exports_count > 0:
         gates_failed.append('exports_no_private')
+    if bool(getattr(g, 'exports_require_nonempty_all', False)) and missing_nonempty_all_count > 0:
+        gates_failed.append('exports_require_nonempty_all')
 
     results["gates_failed"] = gates_failed
     results["status"] = "passed" if not gates_failed else "failed"
@@ -1183,6 +1188,60 @@ def _ext_exports(cfg: QAConfig, artifacts_dir: Path) -> tuple[int, Path]:
     report.write_text(json.dumps({'private_exports': priv_list}, ensure_ascii=False, indent=2), encoding='utf-8')
     count = sum(len(item.get('private_exports', [])) for item in priv_list)
     return count, report
+
+
+def _ext_exports_require_nonempty_all(cfg: QAConfig, artifacts_dir: Path) -> tuple[int, Path]:
+    """检查包内 __init__.py 是否定义非空 __all__。
+
+    返回 (missing_count, report_path)
+    报表包含缺少或空 __all__ 的 __init__.py 列表。
+    支持通过 gates.exports_nonempty_all_exclude (glob) 排除。
+    """
+    paths = cfg.tool.paths
+    missing: list[dict[str, _Any]] = []
+    import fnmatch
+    excludes = list(getattr(cfg.gates, 'exports_nonempty_all_exclude', []) or [])
+    for root in paths:
+        base = Path(root)
+        if not base.exists():
+            continue
+        for dirpath, dirnames, filenames in os.walk(base):
+            if '__init__.py' not in filenames:
+                continue
+            initp = Path(dirpath) / '__init__.py'
+            # 排除
+            path_str = str(initp)
+            rel_str = path_str
+            try:
+                rel_str = str(initp.relative_to(Path.cwd()))
+            except Exception:
+                pass
+            if any(fnmatch.fnmatch(path_str, pat) or fnmatch.fnmatch(rel_str, pat) for pat in excludes):
+                continue
+            try:
+                tree = _ast_ext.parse(initp.read_text(encoding='utf-8'))
+            except Exception:
+                continue
+            found = False
+            nonempty = False
+            for node in tree.body:
+                if isinstance(node, _ast_ext.Assign):
+                    for target in node.targets:
+                        if isinstance(target, _ast_ext.Name) and target.id == '__all__':
+                            found = True
+                            if isinstance(node.value, (_ast_ext.List, _ast_ext.Tuple)):
+                                nonempty = len(getattr(node.value, 'elts', []) or []) > 0
+                            elif isinstance(node.value, _ast_ext.Call):
+                                # 允许 list([...]) 之类表达式，无法静态判定长度 -> 视为存在但未知；不计为缺失
+                                nonempty = True
+                            else:
+                                # 其他不可静态检查的情况，视为存在
+                                nonempty = True
+            if not found or not nonempty:
+                missing.append({'package_init': str(initp), 'has_all': found, 'nonempty': nonempty})
+    report = artifacts_dir / 'exports_nonempty_all.json'
+    report.write_text(json.dumps({'missing_nonempty_all': missing}, ensure_ascii=False, indent=2), encoding='utf-8')
+    return len(missing), report
 
 
 def _write_github_actions() -> Path:
