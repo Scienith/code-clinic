@@ -20,7 +20,7 @@ Commands
 - Auto-fix format/lint issues only:
   - `codeclinic qa fix`
 
-Outputs (default `build/codeclinic/`)
+Outputs (default `results/`)
 - `summary.json` (overall status, failed gates, key metrics)
 - `logs/*.log` (black/ruff/mypy/pytest/complexity)
 - `artifacts/`:
@@ -37,6 +37,74 @@ All QA provider tools (black, ruff, mypy, pytest, coverage, radon, pyyaml) are i
 
 Note: CodeClinic treats `codeclinic.yaml` as the single source of truth for QA configuration. It generates ephemeral tool configs during execution and does not scaffold pre-commit/GitHub Actions/Makefile.
 
+### 配置即“检测内容”（不暴露具体工具）
+- 全局设置在 `tool:`（扫描范围与输出目录）。
+- 检测参数与门禁集中在 `gates:`，按检测类型分组；不需要声明底层执行工具，CodeClinic 内部会选择合适实现。
+- 仅与执行流程相关的非门禁参数（如 `pytest` 启动参数、是否生成 JUnit）保留在 `tools:`。
+
+示例（片段）
+```yaml
+tool:
+  paths: ["src"]
+  include: ["**/*.py"]
+  exclude: ["**/.venv/**", "**/migrations/**", "**/tests/**"]
+  output: "results"
+
+gates:
+  imports:
+    matrix:
+      # 默认拒绝（固定，不可配置）
+      forbid_private_modules: true
+      allow_patterns:
+        - ["*", "<self>.*"]
+        - ["<ancestor>.api.**", "<ancestor>.services.**"]
+        - ["<ancestor>.services.**", "<ancestor>.selectors.**"]
+        - ["<ancestor>.selectors.**", "<ancestor>.models"]
+        - ["<ancestor>.selectors.**", "<ancestor>.models.**"]
+        - ["*", "<ancestor>.schemas"]
+        - ["*", "<ancestor>.schemas.**"]
+        - ["*", "<ancestor>.types"]
+        - ["*", "<ancestor>.types.**"]
+        - ["apps.*.**", "apps.*.public"]
+        - ["apps.*.**", "apps.*.public.**"]
+        - ["*", "utils"]
+        - ["*", "utils.**"]
+        - ["*", "types"]
+        - ["*", "types.**"]
+        - ["*", "common"]
+        - ["*", "common.**"]
+
+  formatter:
+    line_length: 88          # 行宽（同时用于格式化与 Lint 的行宽基准）
+  linter:
+    ruleset: ["E","F","I","B","D"]
+    line_length: 88
+    docstyle_convention: "google"
+  typecheck:
+    strict: true
+
+  formatter_clean: true      # Black --check 需通过
+  linter_errors_max: 0       # Ruff 错误上限
+  mypy_errors_max: 0         # Mypy 错误上限
+  coverage_min: 80           # 覆盖率下限（%）
+  max_file_loc: 500          # 单文件最大 LOC
+  import_violations_max: 0   # 导入违规上限
+
+tools:
+  tests:
+    args: ["-q"]
+    coverage:
+      report: "xml"          # 生成 coverage.xml
+    junit:
+      enabled: true
+      output: "build/codeclinic/artifacts/junit.xml"
+```
+
+说明
+- `gates.formatter/linters/typecheck` 的参数用于执行与门禁判定（例如行宽一致性影响 Black/Ruff 检测）。
+- `coverage_min`、`max_file_loc`、`import_violations_max` 等为直接门禁阈值。
+- JUnit/coverage 的输出路径与 `tool.output` 保持一致默认配置；通过安装脚本时会定向到 `codeclinic/results/`。
+
 ### Detect Long Files (LOC gate)
 - Set threshold in `codeclinic.yaml`:
   ```yaml
@@ -48,12 +116,12 @@ Note: CodeClinic treats `codeclinic.yaml` as the single source of truth for QA c
   ```
 - Run QA: `codeclinic qa run`
 - Inspect results:
-  - Over-limit files: `build/codeclinic/artifacts/complexity.json` → `summary.files_over_limit`
+  - Over-limit files: `results/artifacts/complexity.json` → `summary.files_over_limit`
   - Quick print (no jq required):
     ```bash
     python3 - <<'PY'
     import json
-    p='build/codeclinic/artifacts/complexity.json'
+    p='results/artifacts/complexity.json'
     d=json.load(open(p))
     print('\n'.join(d['summary'].get('files_over_limit', [])))
     PY
@@ -62,7 +130,7 @@ Note: CodeClinic treats `codeclinic.yaml` as the single source of truth for QA c
     ```bash
     python3 - <<'PY'
     import json
-    d=json.load(open('build/codeclinic/artifacts/complexity.json'))
+    d=json.load(open('results/artifacts/complexity.json'))
     for f in d['files']:
         if isinstance(f.get('loc'), int) and f['loc']>500:
             print(f["path"], f["loc"])  # adjust 500 if needed

@@ -1,6 +1,6 @@
 # Package A12 - 50% of functions have @stub decorator
 from codeclinic import stub
-from example_project.common import BaseProcessor, setup_logging
+from demo.common import BaseProcessor, setup_logging
 
 def fetch_data(item_id):
     """Fetch data for a specific item ID."""

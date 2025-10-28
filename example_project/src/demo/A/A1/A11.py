@@ -1,7 +1,7 @@
 # Module A11 - No stub functions (fully implemented)
 import json
 from datetime import datetime
-from example_project.common import get_base_config
+from demo.common import get_base_config
 
 def calculate_metrics(data):
     """Calculate various metrics from the data."""

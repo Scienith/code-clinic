@@ -1,0 +1,150 @@
+version: "1.0"
+
+# CodeClinic 严格基线（矩阵白名单 + 严格质量门禁）
+# Strict baseline for CodeClinic (matrix allow-list + strict QA gates)
+
+# 全局设置（扫描范围与输出目录）
+tool:
+  # 默认扫描的项目根目录（可通过 --path 覆盖）
+  # Default project roots to scan (override via --path)
+  paths: ["src"]
+  include: ["**/*.py"]
+  # 全局排除（不参与扫描/统计）
+  exclude: ["**/.venv/**", "**/migrations/**", "**/tests/**"]
+  # 输出目录（qa run 的产物根目录）。
+  # 建议设置为相对路径；若与安装脚本配合并位于 <project>/codeclinic/ 下，
+  #   使用 "results" 将产物写入 <project>/codeclinic/results/。
+  output: "codeclinic/results"
+
+tools:
+  tests:
+    junit:
+      enabled: true
+      # Force JUnit XML under codeclinic/results/artifacts/
+      output: "codeclinic/results/artifacts/junit.xml"
+
+gates:
+  # --- imports（导入规则）---
+  imports:
+    # “矩阵白名单”规则：未命中白名单的导入默认拒绝
+    matrix:
+      # 默认拒绝（固定，不可配置）
+      # 禁止私有路径段（以下划线开头的模块/包）
+      forbid_private_modules: true
+      # 白名单（source=导入方 importer，target=被导入 imported）
+      allow_patterns:
+        # 允许导入“自身”的直接子模块（例如 A -> A.x）
+        - ["*", "<self>.*"]
+
+        # 同域契约（只读集合）
+        - ["*", "<ancestor>.schemas"]
+        - ["*", "<ancestor>.schemas.**"]
+        - ["*", "<ancestor>.types"]
+        - ["*", "<ancestor>.types.**"]
+
+        # 全局层（可根据项目需要调整）
+        - ["*", "utils"]
+        - ["*", "utils.**"]
+        - ["*", "types"]
+        - ["*", "types.**"]
+        - ["*", "common"]
+        - ["*", "common.**"]
+
+    # 禁止符号级私有导入（from x import _private）
+    forbid_private_symbols: true
+    # 包内环路（SCC）最大允许数量（0 表示不允许）
+    cycles_max: 0
+
+  # --- formatter（格式化）---
+  formatter:
+    # 行宽（同时用于格式化与 Lint 的行宽基准）
+    line_length: 88
+    # 格式化必须干净（Black --check 通过）
+    clean: true
+
+  # --- linter（静态检查）---
+  linter:
+    # 规则集（E/F/I/B/D：基础错误/导入排序/常见缺陷/文档）
+    ruleset: ["E","F","I","B","D"]
+    # 文档字符串风格（可选：google/numpy/pep257）
+    docstyle_convention: "google"
+    # Lint 错误上限（超过则门禁失败）
+    errors_max: 0
+
+  # --- typecheck（类型检查）---
+  typecheck:
+    # 严格模式（建议 true）
+    strict: true
+    # 类型检查错误上限（超过则门禁失败）
+    errors_max: 0
+
+  tests:
+    # 覆盖率最低要求（%）
+    coverage_min: 80
+    # 是否允许组件缺少同层级 tests 目录
+    allow_missing_component_tests: false
+    # 依赖无 stub 的组件，其测试必须全绿
+    components_dep_stub_free_requires_green: true
+    # 红灯阶段失败类型约束：尽量以断言失败为主，避免 error
+    red_failures_are_assertions: true
+  complexity:
+    # 单文件最大 LOC 上限
+    max_file_loc: 500
+    # 可选：圈复杂度等级与可维护性指数
+    # cc_max_rank_max: "C"
+    # mi_min: 70
+
+
+  # 函数度量阈值（行数/参数数/嵌套层级）
+  functions:
+    loc_max: 50
+    args_max: 5
+    nesting_max: 3
+    # 统计函数行数时是否包含 Docstring
+    count_docstrings: true
+
+  # 文档契约（如 stub 的 doc）缺失上限
+  docs:
+    contracts_missing_max: 0
+    # 要求 docstring 包含的关键段落（按包含关系匹配；默认大小写不敏感）
+    required_sections: ["功能概述", "前置条件", "后置条件", "不变量", "副作用"]
+    # 是否区分大小写（默认 false）
+    # case_sensitive: false
+    # 检测范围：全部函数（无需配置）
+
+  # 包/导出规则
+  packages:
+    # 包目录必须包含 __init__.py
+    require_dunder_init: true
+    # 按 glob 排除不要求存在 __init__.py 的目录（允许非包目录）
+    missing_init_exclude: []
+    exports:
+      # 禁止在 __all__ 导出私有名（以下划线开头）
+      no_private: true
+      # __init__.py 是否必须定义非空 __all__（默认关闭）
+      # require_nonempty_all: true
+      # 按 glob 排除不检查非空 __all__ 的路径
+      nonempty_all_exclude: []
+    # Public 出口无副作用（仅允许 re-export 与 __all__ 定义）
+    public_no_side_effects: true
+    # 顶层禁止的调用（可通配）
+    public_side_effect_forbidden_calls: ["open", "subprocess.*", "os.system", "pathlib.Path.write_text", "pathlib.Path.write_bytes", "requests.*"]
+
+  # 模块命名测试存在性
+  tests_presence:
+    # 包内模块必须有 tests/test_<module>.py（__init__.py 自动跳过）
+    modules_require_named_tests: true
+    # 按 glob 模式排除不检查“同级命名测试文件”的模块
+    modules_named_tests_exclude:
+      - "**/exceptions.py"
+      - "**/constants.py"
+      - "**/schema.py"
+      - "**/types.py"
+
+  # Fail-Fast 禁止与豁免
+  failfast:
+    forbid_dict_get_default: true
+    forbid_getattr_default: true
+    forbid_env_default: true
+    forbid_import_fallback: true
+    allow_comment_tags: ["allow fallback", "codeclinic: allow-fallback"]

@@ -9,10 +9,11 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .qa_config import QAConfig, load_qa_config, write_qa_config
+from .qa_config import QAConfig, load_qa_config, write_qa_config, _strict_template_or_default
 
 
 def qa_init(force: bool = False) -> None:
+    # Always write/update root config for backward-compat
     target = write_qa_config("codeclinic.yaml", force=force)
     if target.name.endswith(".qa.example.yaml"):
         print(f"⚠ 检测到已有 codeclinic.yaml，示例已生成: {target}")
@@ -20,7 +21,45 @@ def qa_init(force: bool = False) -> None:
     else:
         print(f"✓ 已生成 QA 配置: {target}")
 
-    # No extra scaffolding (GitHub Actions/Makefile) provided by CodeClinic
+    # Additionally scaffold codeclinic/ folder with wrapper + colocated yaml
+    try:
+        from pathlib import Path as _P
+        proj = _P.cwd()
+        cc_dir = proj / "codeclinic"
+        cc_dir.mkdir(parents=True, exist_ok=True)
+        # Write colocated YAML using strict template
+        (cc_dir / "codeclinic.yaml").write_text(_strict_template_or_default(), encoding="utf-8")
+        # Write wrapper script from packaged template
+        try:
+            from importlib.resources import files as _files  # type: ignore
+        except Exception:
+            _files = None  # type: ignore
+        wrapper_text = None
+        if _files is not None:
+            try:
+                wrapper_text = (_files(__package__) / "templates" / "codeclinic.sh").read_text(encoding="utf-8")
+            except Exception:
+                wrapper_text = None
+        if not wrapper_text:
+            # Fallback to filesystem
+            try:
+                wrapper_text = (_P(__file__).parent / "templates" / "codeclinic.sh").read_text(encoding="utf-8")
+            except Exception:
+                wrapper_text = None
+        if wrapper_text:
+            wrapper_path = cc_dir / "codeclinic.sh"
+            wrapper_path.write_text(wrapper_text, encoding="utf-8")
+            try:
+                import os as _os
+                _os.chmod(wrapper_path, 0o755)
+            except Exception:
+                pass
+        print(f"✓ 已生成 codeclinic/ 包装与配置: {cc_dir}")
+        print("   - 运行质检: codeclinic/codeclinic.sh qa run")
+        print("   - 自动修复: codeclinic/codeclinic.sh qa fix")
+    except Exception as e:
+        _ = e
+        # non-fatal
 
 
 def qa_run(config_path: str = "codeclinic.yaml", output_override: Optional[str] = None) -> int:
@@ -109,11 +148,18 @@ def qa_run(config_path: str = "codeclinic.yaml", output_override: Optional[str] 
         "status": "passed" if comp_summary.get("gate_failed_count", 0) == 0 else "failed",
     }
 
-    # Extensions: function metrics, stub doc contracts, exports
+    # Extensions: function metrics, stub doc contracts, exports, private symbol imports
     fn_over_count, fn_report = _ext_function_metrics(cfg, artifacts_dir)
     stub_missing_count, docs_report = _ext_doc_contracts(cfg, artifacts_dir)
     private_exports_count, exports_report = _ext_exports(cfg, artifacts_dir)
     missing_nonempty_all_count, exports_all_report = _ext_exports_require_nonempty_all(cfg, artifacts_dir)
+    privsym_count, privsym_report = _ext_private_symbol_imports(cfg, artifacts_dir)
+    # New: fail-fast checks, public exports side-effects, import cycles, JUnit failure types, stubs NotImplemented
+    ff_count, ff_report = _ext_failfast(cfg, artifacts_dir)
+    pubse_count, pubse_report = _ext_public_no_side_effects(cfg, artifacts_dir)
+    cycles_count, cycles_report = _ext_import_cycles(cfg, artifacts_dir, project_data)
+    notimpl_count, notimpl_report = _ext_stubs_no_notimplemented(cfg, artifacts_dir)
+    junit_failures, junit_errors = _ext_junit_failure_types(results.get("metrics", {}).get("tests", {}).get("coverage_xml"), artifacts_dir, results.get("logs", {}).get("pytest"))
     results.setdefault("metrics", {})["function_metrics_ext"] = {
         "violations": fn_over_count,
         "report": str(fn_report) if fn_report else None,
@@ -130,6 +176,36 @@ def qa_run(config_path: str = "codeclinic.yaml", output_override: Optional[str] 
         "report": str(exports_report) if exports_report else None,
         "report_all": str(exports_all_report) if exports_all_report else None,
         "status": "passed" if private_exports_count == 0 else "failed",
+    }
+    results["metrics"]["imports_private_symbols"] = {
+        "violations": privsym_count,
+        "report": str(privsym_report) if privsym_report else None,
+        "status": "passed" if privsym_count == 0 else "failed",
+    }
+    results["metrics"]["failfast"] = {
+        "violations": ff_count,
+        "report": str(ff_report) if ff_report else None,
+        "status": "passed" if ff_count == 0 else "failed",
+    }
+    results["metrics"]["public_exports"] = {
+        "violations": pubse_count,
+        "report": str(pubse_report) if pubse_report else None,
+        "status": "passed" if pubse_count == 0 else "failed",
+    }
+    results["metrics"]["import_cycles"] = {
+        "violations": cycles_count,
+        "report": str(cycles_report) if cycles_report else None,
+        "status": "passed" if cycles_count == 0 else "failed",
+    }
+    results["metrics"]["stubs_notimplemented"] = {
+        "violations": notimpl_count,
+        "report": str(notimpl_report) if notimpl_report else None,
+        "status": "passed" if notimpl_count == 0 else "failed",
+    }
+    results["metrics"]["tests_junit_types"] = {
+        "failures": junit_failures,
+        "errors": junit_errors,
+        "status": "passed" if (junit_errors or 0) == 0 else "failed",
     }
 
     # Gates evaluation
@@ -197,7 +273,7 @@ def qa_run(config_path: str = "codeclinic.yaml", output_override: Optional[str] 
 
     # Modules require named tests gate
     if cfg.gates.modules_require_named_tests:
-        missing_tests, presence_report = _check_modules_require_named_tests(cfg, project_data)
+        missing_tests, presence_report = _check_modules_require_named_tests(cfg, project_data, artifacts_dir)
         results.setdefault("metrics", {}).setdefault("tests_presence", {})["missing_named_tests"] = missing_tests
         results["metrics"]["tests_presence"]["report"] = str(presence_report)
         if missing_tests:
@@ -216,6 +292,25 @@ def qa_run(config_path: str = "codeclinic.yaml", output_override: Optional[str] 
         gates_failed.append('exports_no_private')
     if bool(getattr(g, 'exports_require_nonempty_all', False)) and missing_nonempty_all_count > 0:
         gates_failed.append('exports_require_nonempty_all')
+    if bool(getattr(g, 'imports_forbid_private_symbols', False)) and privsym_count > 0:
+        gates_failed.append('imports_forbid_private_symbols')
+    # New gates
+    if any([
+        (g.failfast_forbid_dict_get_default or g.failfast_forbid_getattr_default or g.failfast_forbid_env_default or g.failfast_forbid_import_fallback)
+    ]) and ff_count > 0:
+        gates_failed.append('failfast')
+    try:
+        cyc_thr = int(getattr(g, 'imports_cycles_max', 0))
+        if cyc_thr >= 0 and cycles_count > cyc_thr:
+            gates_failed.append('imports_cycles_max')
+    except Exception:
+        pass
+    if bool(getattr(g, 'packages_public_no_side_effects', False)) and pubse_count > 0:
+        gates_failed.append('packages_public_no_side_effects')
+    if bool(getattr(g, 'stubs_no_notimplemented_non_abc', False)) and notimpl_count > 0:
+        gates_failed.append('stubs_no_notimplemented_non_abc')
+    if bool(getattr(g, 'tests_red_failures_are_assertions', False)) and (junit_errors or 0) > 0:
+        gates_failed.append('tests_red_failures_are_assertions')
 
     results["gates_failed"] = gates_failed
     results["status"] = "passed" if not gates_failed else "failed"
@@ -388,9 +483,8 @@ def _run_pytest_coverage(cfg: QAConfig, logs_dir: Path, artifacts_dir: Path, out
     # Ensure junit target path
     junit_xml_path: Optional[Path] = None
     if cfg.tools.tests.junit.enabled:
-        raw = Path(cfg.tools.tests.junit.output)
-        # If relative path, treat it as relative to CWD (not out_dir) to avoid duplication
-        junit_xml_path = raw if raw.is_absolute() else raw
+        # 统一将 JUnit 报告写到 <output>/artifacts/junit.xml，不再依赖配置中的路径
+        junit_xml_path = out_dir / "artifacts" / "junit.xml"
         junit_xml_path.parent.mkdir(parents=True, exist_ok=True)
     # Run tests
     # Use the current interpreter to guarantee the same venv/site-packages
@@ -421,11 +515,20 @@ def _run_pytest_coverage(cfg: QAConfig, logs_dir: Path, artifacts_dir: Path, out
         pytest_cfg.write_text("[pytest]\n", encoding="utf-8")
     except Exception:
         pass
+    # Ensure coverage data (.coverage) is written under the output directory
+    try:
+        import os as _os_env
+        _os_env.environ["COVERAGE_FILE"] = str(out_dir / ".coverage")
+    except Exception:
+        pass
+
+    data_file = str(out_dir / ".coverage")
     pytest_cmd = [
         sys.executable,
         "-m",
         "coverage",
         "run",
+        f"--data-file={data_file}",
         "--rcfile",
         str(cov_rc),
         "-m",
@@ -438,7 +541,7 @@ def _run_pytest_coverage(cfg: QAConfig, logs_dir: Path, artifacts_dir: Path, out
         pytest_cmd += ["--junitxml", str(junit_xml_path)]
     code_run, out_run = _call(pytest_cmd)
     # Produce coverage xml regardless of test status to capture partial results
-    cov_xml_cmd = ["coverage", "xml", "-o", str(cov_xml), "--rcfile", str(cov_rc)]
+    cov_xml_cmd = ["coverage", "xml", "-o", str(cov_xml), "--rcfile", str(cov_rc), f"--data-file={data_file}"]
     _ = _call(cov_xml_cmd)[0]
     cov_pct = _parse_coverage_percent(cov_xml) if cov_xml.exists() else None
     combined = out_run
@@ -918,6 +1021,8 @@ def _aggregate_component_tests(
 
 def _check_packages_require_dunder_init(cfg: QAConfig) -> List[str]:
     missing: List[str] = []
+    excludes = list(getattr(cfg.gates, 'packages_missing_init_exclude', []) or [])
+    import fnmatch
     for root in cfg.tool.paths:
         base = Path(root)
         if not base.exists():
@@ -928,6 +1033,15 @@ def _check_packages_require_dunder_init(cfg: QAConfig) -> List[str]:
             # skip tests directories
             if dpath.name == "tests" or "/tests/" in (str(dpath) + "/"):
                 continue
+            # exclude by patterns (absolute and best-effort relative)
+            path_str = str(dpath)
+            rel_str = path_str
+            try:
+                rel_str = str(dpath.relative_to(Path.cwd()))
+            except Exception:
+                pass
+            if any(fnmatch.fnmatch(path_str, pat) or fnmatch.fnmatch(rel_str, pat) for pat in excludes):
+                continue
             py_files = [f for f in filenames if f.endswith(".py")]
             if py_files:
                 if not (dpath / "__init__.py").exists():
@@ -935,7 +1049,7 @@ def _check_packages_require_dunder_init(cfg: QAConfig) -> List[str]:
     return missing
 
 
-def _check_modules_require_named_tests(cfg: QAConfig, project_data: Any) -> Tuple[List[str], Path]:
+def _check_modules_require_named_tests(cfg: QAConfig, project_data: Any, artifacts_dir: Path) -> Tuple[List[str], Path]:
     """Ensure every in-package module has a matching tests/test_<module>.py file.
     Only applies to modules inside packages (i.e., node.parent is not None)."""
     missing: List[str] = []
@@ -968,7 +1082,7 @@ def _check_modules_require_named_tests(cfg: QAConfig, project_data: Any) -> Tupl
         if not expected.exists():
             missing.append(name)
 
-    report_path = Path(cfg.tool.output) / "artifacts" / "module_tests_presence.json"
+    report_path = Path(artifacts_dir) / "module_tests_presence.json"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report = {"version": "1.0", "missing_named_tests": missing}
     report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -1202,10 +1316,348 @@ def _ext_function_metrics(cfg: QAConfig, artifacts_dir: Path) -> tuple[int, Path
     return len(violations), report
 
 
+def _ext_private_symbol_imports(cfg: QAConfig, artifacts_dir: Path) -> tuple[int, Path]:
+    """Scan for symbol-level private imports, e.g. `from x import _private`.
+    We intentionally limit to ImportFrom alias names beginning with '_' to avoid
+    duplication with module-path private checks handled by import rules.
+    """
+    files = _ext_collect_files(cfg)
+    violations: list[dict[str, _Any]] = []
+    for f in files:
+        try:
+            src = Path(f).read_text(encoding='utf-8')
+            tree = _ast_ext.parse(src)
+        except Exception:
+            continue
+        for node in [n for n in _ast_ext.walk(tree) if isinstance(n, _ast_ext.ImportFrom)]:
+            mod = getattr(node, 'module', None) or ''
+            for alias in getattr(node, 'names', []) or []:
+                try:
+                    name = getattr(alias, 'name', '') or ''
+                except Exception:
+                    name = ''
+                if not name or name == '*':
+                    continue
+                last = name.split('.')[-1]
+                if last.startswith('_'):
+                    violations.append({
+                        'file': f,
+                        'lineno': getattr(node, 'lineno', 0) or 0,
+                        'module': mod,
+                        'import': name,
+                    })
+    report = artifacts_dir / 'private_symbol_imports.json'
+    report.write_text(json.dumps({'violations': violations}, ensure_ascii=False, indent=2), encoding='utf-8')
+    return len(violations), report
+
+
+def _line_has_allow_comment(src: str, lineno: int, tags: List[str]) -> bool:
+    try:
+        line = src.splitlines()[max(0, lineno - 1)]
+    except Exception:
+        return False
+    ls = line.lower()
+    return any(tag.lower() in ls for tag in tags)
+
+
+def _ext_failfast(cfg: QAConfig, artifacts_dir: Path) -> tuple[int, Path]:
+    files = _ext_collect_files(cfg)
+    tags = list(getattr(cfg.gates, 'failfast_allow_comment_tags', []) or [])
+    forbid_dict_get = bool(getattr(cfg.gates, 'failfast_forbid_dict_get_default', True))
+    forbid_getattr = bool(getattr(cfg.gates, 'failfast_forbid_getattr_default', True))
+    forbid_env = bool(getattr(cfg.gates, 'failfast_forbid_env_default', True))
+    forbid_imp_fb = bool(getattr(cfg.gates, 'failfast_forbid_import_fallback', True))
+    violations: list[dict[str, _Any]] = []
+    for f in files:
+        try:
+            src = Path(f).read_text(encoding='utf-8')
+            tree = _ast_ext.parse(src)
+        except Exception:
+            continue
+        # getattr default
+        if forbid_getattr:
+            for n in [n for n in _ast_ext.walk(tree) if isinstance(n, _ast_ext.Call)]:
+                try:
+                    func = n.func
+                    if isinstance(func, _ast_ext.Name) and func.id == 'getattr' and len(getattr(n, 'args', []) or []) >= 3:
+                        if not _line_has_allow_comment(src, getattr(n, 'lineno', 0) or 0, tags):
+                            violations.append({'file': f, 'lineno': getattr(n, 'lineno', 0) or 0, 'type': 'getattr_default'})
+                except Exception:
+                    pass
+        # dict.get default & os.getenv/environ.get default
+        for n in [n for n in _ast_ext.walk(tree) if isinstance(n, _ast_ext.Call)]:
+            func = getattr(n, 'func', None)
+            if not isinstance(func, (_ast_ext.Attribute, _ast_ext.Name)):
+                continue
+            argc = len(getattr(n, 'args', []) or [])
+            # os.getenv
+            if forbid_env and isinstance(func, _ast_ext.Attribute) and isinstance(func.value, _ast_ext.Name) and func.value.id == 'os' and func.attr == 'getenv' and argc >= 2:
+                if not _line_has_allow_comment(src, getattr(n, 'lineno', 0) or 0, tags):
+                    violations.append({'file': f, 'lineno': getattr(n, 'lineno', 0) or 0, 'type': 'env_default', 'call': 'os.getenv'})
+                continue
+            # os.environ.get
+            if forbid_env and isinstance(func, _ast_ext.Attribute) and isinstance(func.value, _ast_ext.Attribute) and isinstance(func.value.value, _ast_ext.Name) and func.value.value.id == 'os' and func.value.attr == 'environ' and func.attr == 'get' and argc >= 2:
+                if not _line_has_allow_comment(src, getattr(n, 'lineno', 0) or 0, tags):
+                    violations.append({'file': f, 'lineno': getattr(n, 'lineno', 0) or 0, 'type': 'env_default', 'call': 'os.environ.get'})
+                continue
+            # generic .get default (heuristic)
+            if forbid_dict_get and isinstance(func, _ast_ext.Attribute) and func.attr == 'get' and argc >= 2:
+                # Heuristic exclusions to avoid common false positives (e.g., requests.get)
+                base = func.value
+                base_name = ''
+                if isinstance(base, _ast_ext.Name):
+                    base_name = base.id
+                elif isinstance(base, _ast_ext.Attribute):
+                    # get root name
+                    cur = base
+                    while isinstance(cur, _ast_ext.Attribute):
+                        cur = cur.value
+                    if isinstance(cur, _ast_ext.Name):
+                        base_name = cur.id
+                if base_name in {'requests', 'httpx'}:
+                    continue
+                if not _line_has_allow_comment(src, getattr(n, 'lineno', 0) or 0, tags):
+                    violations.append({'file': f, 'lineno': getattr(n, 'lineno', 0) or 0, 'type': 'dict_get_default'})
+        # try/except ImportError fallback
+        if forbid_imp_fb:
+            for t in [x for x in _ast_ext.walk(tree) if isinstance(x, _ast_ext.Try)]:
+                for h in getattr(t, 'handlers', []) or []:
+                    tp = getattr(h, 'type', None)
+                    name = ''
+                    if isinstance(tp, _ast_ext.Name):
+                        name = tp.id
+                    elif isinstance(tp, _ast_ext.Attribute):
+                        name = tp.attr
+                    if name == 'ImportError':
+                        # Allow inline comment override on 'try' line
+                        if _line_has_allow_comment(src, getattr(t, 'lineno', 0) or 0, tags):
+                            continue
+                        violations.append({'file': f, 'lineno': getattr(h, 'lineno', 0) or 0, 'type': 'import_fallback'})
+    report = artifacts_dir / 'failfast_violations.json'
+    report.write_text(json.dumps({'violations': violations}, ensure_ascii=False, indent=2), encoding='utf-8')
+    return len(violations), report
+
+
+def _ext_public_no_side_effects(cfg: QAConfig, artifacts_dir: Path) -> tuple[int, Path]:
+    files = _ext_collect_files(cfg)
+    forbid = bool(getattr(cfg.gates, 'packages_public_no_side_effects', True))
+    forbidden_calls = list(getattr(cfg.gates, 'packages_public_side_effect_forbidden_calls', []) or [])
+    if not forbid:
+        # Disabled
+        report = artifacts_dir / 'public_exports_side_effects.json'
+        report.write_text(json.dumps({'violations': []}, ensure_ascii=False, indent=2), encoding='utf-8')
+        return 0, report
+    def dotted_name(n: _ast_ext.AST) -> str:
+        if isinstance(n, _ast_ext.Name):
+            return n.id
+        if isinstance(n, _ast_ext.Attribute):
+            parts = []
+            cur = n
+            while isinstance(cur, _ast_ext.Attribute):
+                parts.append(cur.attr)
+                cur = cur.value
+            if isinstance(cur, _ast_ext.Name):
+                parts.append(cur.id)
+            parts.reverse()
+            return '.'.join(parts)
+        return ''
+    import fnmatch as _fnm
+    violations: list[dict[str, _Any]] = []
+    for f in files:
+        if not f.endswith('__init__.py'):
+            continue
+        try:
+            src = Path(f).read_text(encoding='utf-8')
+            tree = _ast_ext.parse(src)
+        except Exception:
+            continue
+        # Top-level only
+        for idx, st in enumerate(getattr(tree, 'body', []) or []):
+            if idx == 0 and isinstance(st, _ast_ext.Expr) and isinstance(getattr(st, 'value', None), _ast_ext.Constant) and isinstance(st.value.value, str):
+                # module docstring allowed
+                continue
+            if isinstance(st, (_ast_ext.Import, _ast_ext.ImportFrom)):
+                continue
+            # allow __all__ = [...] or tuple
+            if isinstance(st, _ast_ext.Assign):
+                # any target is __all__
+                ok = False
+                for tgt in getattr(st, 'targets', []) or []:
+                    if isinstance(tgt, _ast_ext.Name) and tgt.id == '__all__':
+                        ok = True
+                        break
+                if ok:
+                    continue
+            # detect top-level calls
+            if isinstance(st, _ast_ext.Expr) and isinstance(getattr(st, 'value', None), _ast_ext.Call):
+                dn = dotted_name(getattr(st.value, 'func', None))
+                if dn and any(_fnm.fnmatch(dn, pat) for pat in forbidden_calls):
+                    violations.append({'file': f, 'lineno': getattr(st, 'lineno', 0) or 0, 'type': 'forbidden_call', 'call': dn})
+                    continue
+            # everything else forbidden
+            violations.append({'file': f, 'lineno': getattr(st, 'lineno', 0) or 0, 'type': 'disallowed_top_level'})
+    report = artifacts_dir / 'public_exports_side_effects.json'
+    report.write_text(json.dumps({'violations': violations}, ensure_ascii=False, indent=2), encoding='utf-8')
+    return len(violations), report
+
+
+def _ext_import_cycles(cfg: QAConfig, artifacts_dir: Path, project_data: Any) -> tuple[int, Path]:
+    # Build adjacency list from project_data.import_edges
+    edges = list(project_data.import_edges)
+    nodes: Dict[str, int] = {}
+    for a, b in edges:
+        if a not in nodes:
+            nodes[a] = len(nodes)
+        if b not in nodes:
+            nodes[b] = len(nodes)
+    adj: Dict[int, list[int]] = {nodes[n]: [] for n in nodes}
+    for a, b in edges:
+        adj[nodes[a]].append(nodes[b])
+    # Tarjan SCC
+    index = 0
+    indices: Dict[int, int] = {}
+    lowlink: Dict[int, int] = {}
+    stack: list[int] = []
+    onstack: set[int] = set()
+    sccs: list[list[str]] = []
+    sys.setrecursionlimit(10000)
+    def strongconnect(v: int):
+        nonlocal index
+        indices[v] = index
+        lowlink[v] = index
+        index += 1
+        stack.append(v)
+        onstack.add(v)
+        for w in adj.get(v, []):
+            if w not in indices:
+                strongconnect(w)
+                lowlink[v] = min(lowlink[v], lowlink[w])
+            elif w in onstack:
+                lowlink[v] = min(lowlink[v], indices[w])
+        if lowlink[v] == indices[v]:
+            comp: list[str] = []
+            while True:
+                w = stack.pop()
+                onstack.discard(w)
+                # find name by index
+                name = next((n for n, i in nodes.items() if i == w), None)
+                if name:
+                    comp.append(name)
+                if w == v:
+                    break
+            if len(comp) > 1:
+                sccs.append(sorted(comp))
+    for v in list(nodes.values()):
+        if v not in indices:
+            strongconnect(v)
+    report = artifacts_dir / 'import_cycles.json'
+    report.write_text(json.dumps({'scc_groups': sccs, 'count': len(sccs)}, ensure_ascii=False, indent=2), encoding='utf-8')
+    return len(sccs), report
+
+
+def _ext_stubs_no_notimplemented(cfg: QAConfig, artifacts_dir: Path) -> tuple[int, Path]:
+    files = _ext_collect_files(cfg)
+    violations: list[dict[str, _Any]] = []
+    # Helpers to check ABC context
+    def class_is_abc(cls: _ast_ext.ClassDef) -> bool:
+        # bases contain ABC/abc.ABC/ABCMeta
+        for b in getattr(cls, 'bases', []) or []:
+            if isinstance(b, _ast_ext.Name) and b.id in {'ABC', 'ABCMeta'}:
+                return True
+            if isinstance(b, _ast_ext.Attribute) and isinstance(b.value, _ast_ext.Name) and b.value.id == 'abc' and b.attr in {'ABC', 'ABCMeta'}:
+                return True
+        return False
+    def has_abstractmethod(fn: _ast_ext.AST) -> bool:
+        for d in getattr(fn, 'decorator_list', []) or []:
+            if isinstance(d, _ast_ext.Name) and d.id == 'abstractmethod':
+                return True
+            if isinstance(d, _ast_ext.Attribute) and d.attr == 'abstractmethod':
+                return True
+        return False
+    for f in files:
+        try:
+            src = Path(f).read_text(encoding='utf-8')
+            tree = _ast_ext.parse(src)
+        except Exception:
+            continue
+        class_ctx: dict[int, bool] = {}
+        # Map function to class ABC-ness
+        for n in [n for n in _ast_ext.walk(tree) if isinstance(n, _ast_ext.ClassDef)]:
+            class_ctx[id(n)] = class_is_abc(n)
+        for n in [n for n in _ast_ext.walk(tree) if isinstance(n, (_ast_ext.FunctionDef, _ast_ext.AsyncFunctionDef))]:
+            # Find enclosing class
+            parent_abc = False
+            # Walk parents by re-parsing? AST has no parent link; we can heuristically ignore and assume non-ABC unless decorated
+            # Simple heuristic: if function name startswith '_'? not used here.
+            # Better: infer by scanning for immediate class scope by looking at lineno ranges
+            enclosing: _ast_ext.ClassDef | None = None
+            for c in [c for c in tree.body if isinstance(c, _ast_ext.ClassDef)]:
+                if getattr(c, 'lineno', 0) <= getattr(n, 'lineno', 0) <= (getattr(c, 'end_lineno', 1<<30)):
+                    enclosing = c
+                    break
+            if enclosing is not None:
+                parent_abc = class_is_abc(enclosing)
+            if has_abstractmethod(n) or parent_abc:
+                continue
+            # Detect raise NotImplementedError
+            has_raise_notimpl = any(
+                isinstance(x, _ast_ext.Raise) and (
+                    isinstance(getattr(x, 'exc', None), _ast_ext.Name) and getattr(x.exc, 'id', '') == 'NotImplementedError'
+                    or (isinstance(getattr(x, 'exc', None), _ast_ext.Call) and isinstance(getattr(x.exc, 'func', None), _ast_ext.Name) and getattr(x.exc.func, 'id', '') == 'NotImplementedError')
+                )
+                for x in _ast_ext.walk(n)
+            )
+            # Detect pass-only body (ignore docstring at position 0)
+            body = getattr(n, 'body', []) or []
+            body_eff = body[1:] if (body and isinstance(body[0], _ast_ext.Expr) and isinstance(getattr(body[0], 'value', None), _ast_ext.Constant) and isinstance(body[0].value.value, str)) else body
+            pass_only = all(isinstance(x, (_ast_ext.Pass,)) for x in body_eff) and len(body_eff) > 0
+            if has_raise_notimpl or pass_only:
+                violations.append({'file': f, 'lineno': getattr(n, 'lineno', 0) or 0, 'name': getattr(n, 'name', ''), 'type': 'notimplemented_or_pass'})
+    report = artifacts_dir / 'stubs_no_notimplemented_non_abc.json'
+    report.write_text(json.dumps({'violations': violations}, ensure_ascii=False, indent=2), encoding='utf-8')
+    return len(violations), report
+
+
+def _ext_junit_failure_types(cov_xml_path: _Any, artifacts_dir: Path, pytest_log_path: _Any) -> tuple[int, int]:
+    # cov_xml_path is not junit; try to derive junit path from logs dir or metrics
+    # We'll best-effort search artifacts_dir for junit.xml
+    junit = None
+    # Known path in config default
+    cand = artifacts_dir / 'junit.xml'
+    if cand.exists():
+        junit = cand
+    else:
+        # fallback: search artifacts dir
+        try:
+            for p in artifacts_dir.glob('**/junit.xml'):
+                junit = p
+                break
+        except Exception:
+            pass
+    if junit is None or not junit.exists():
+        return 0, 0
+    try:
+        from xml.etree import ElementTree as ET
+        tree = ET.parse(str(junit))
+        root = tree.getroot()
+        failures = 0
+        errors = 0
+        for case in root.iter('testcase'):
+            if list(case.findall('failure')):
+                failures += 1
+            if list(case.findall('error')):
+                errors += 1
+        return failures, errors
+    except Exception:
+        return 0, 0
+
 def _ext_doc_contracts(cfg: QAConfig, artifacts_dir: Path) -> tuple[int, Path]:
     files = _ext_collect_files(cfg)
-    stub_decorators = set(getattr(cfg.tools.stubs, 'decorator_names', ['stub']))
     missing: list[dict[str, _Any]] = []
+    required = list(getattr(cfg.gates, 'doc_required_sections', []) or [])
+    if not required:
+        required = ['功能概述', '前置条件', '后置条件', '不变量', '副作用']
+    case_sensitive = bool(getattr(cfg.gates, 'doc_case_sensitive', False))
     for f in files:
         try:
             src = Path(f).read_text(encoding='utf-8')
@@ -1214,20 +1666,14 @@ def _ext_doc_contracts(cfg: QAConfig, artifacts_dir: Path) -> tuple[int, Path]:
             continue
         file_missing: list[dict[str, _Any]] = []
         for node in [n for n in _ast_ext.walk(tree) if isinstance(n, (_ast_ext.FunctionDef, _ast_ext.AsyncFunctionDef))]:
-            # detect stub by decorator names
-            decos = []
-            for d in getattr(node, 'decorator_list', []) or []:
-                if isinstance(d, _ast_ext.Name): decos.append(d.id)
-                elif isinstance(d, _ast_ext.Attribute): decos.append(d.attr)
-            if not any(d in stub_decorators for d in decos):
-                continue
+            # 检查所有函数（不区分是否 @stub 或公开）
             doc = _ast_ext.get_docstring(node) or ''
-            # 强制要求五要素：功能概述/前置条件/后置条件/不变量/副作用
-            required = ['功能概述', '前置条件', '后置条件', '不变量', '副作用']
             if not doc.strip():
                 file_missing.append({'name': node.name, 'lineno': node.lineno, 'reason': 'no_doc'})
             else:
-                if not all(kw in doc for kw in required):
+                txt = doc if case_sensitive else doc.lower()
+                keys = required if case_sensitive else [k.lower() for k in required]
+                if not all(k in txt for k in keys):
                     file_missing.append({'name': node.name, 'lineno': node.lineno, 'reason': 'missing_sections', 'required': required})
         if file_missing:
             missing.append({'file': f, 'missing': file_missing})

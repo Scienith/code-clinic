@@ -127,6 +127,34 @@ class GatesSection:
     coverage_min: int = 80
     max_file_loc: int = 500
     import_violations_max: int = 0
+    # 新增：禁止符号级私有导入（from x import _private）
+    imports_forbid_private_symbols: bool = True
+    # Fail-Fast 禁止（默认开启），以及行内豁免标签
+    failfast_forbid_dict_get_default: bool = True
+    failfast_forbid_getattr_default: bool = True
+    failfast_forbid_env_default: bool = True
+    failfast_forbid_import_fallback: bool = True
+    failfast_allow_comment_tags: List[str] = field(
+        default_factory=lambda: ["allow fallback", "codeclinic: allow-fallback"]
+    )
+    # 导入环路（SCC）最大允许数量（0 表示不允许出现）
+    imports_cycles_max: int = 0
+    # Public 出口无副作用
+    packages_public_no_side_effects: bool = True
+    packages_public_side_effect_forbidden_calls: List[str] = field(
+        default_factory=lambda: [
+            "open",
+            "subprocess.*",
+            "os.system",
+            "pathlib.Path.write_text",
+            "pathlib.Path.write_bytes",
+            "requests.*",
+        ]
+    )
+    # 非 ABC 方法禁止 NotImplemented/pass 占位
+    stubs_no_notimplemented_non_abc: bool = True
+    # 红灯失败类型（错误应以断言失败为主，避免 error）
+    tests_red_failures_are_assertions: bool = True
     stub_ratio_max: float = 0.25
     # 可选扩展门禁：圈复杂度等级与可维护性指数
     # 大写字母等级，A最佳、F最差。若为空或未设置，则不启用该门禁
@@ -139,6 +167,8 @@ class GatesSection:
     allow_missing_component_tests: bool = False
     # 新增：要求所有包目录存在 __init__.py
     packages_require_dunder_init: bool = True
+    # 新增：按 glob 模式排除不要求存在 __init__.py 的目录（允许非包目录）
+    packages_missing_init_exclude: List[str] = field(default_factory=list)
     # 新增：每个包内模块是否必须有命名规范 tests/test_<module>.py（仅对包内 .py 文件生效）
     modules_require_named_tests: bool = True
     # 新增：要求包内 __init__.py 必须定义非空 __all__
@@ -148,6 +178,12 @@ class GatesSection:
     # 新增：按 glob 模式排除不检查命名测试的模块列表（相对/绝对路径均可，使用 fnmatch）
     modules_named_tests_exclude: List[str] = field(default_factory=list)
     doc_contracts_missing_max: int = 0
+    # 文档契约检测：要求 docstring 中包含的关键段落关键词
+    doc_required_sections: List[str] = field(default_factory=lambda: [
+        "功能概述", "前置条件", "后置条件", "不变量", "副作用"
+    ])
+    # 是否区分大小写
+    doc_case_sensitive: bool = False
     fn_loc_max: int = 50
     fn_args_max: int = 5
     fn_nesting_max: int = 3
@@ -161,7 +197,7 @@ class ComponentsCfg:
     scope: str = "package"                 # package | module
     tests_dir_name: str = "tests"          # same-level tests dir under component
     dependency_scope: str = "transitive"   # direct | transitive
-    require_self_stub_free: bool = False
+    require_self_stub_free: bool = True
 
 
 @dataclass
@@ -214,6 +250,27 @@ tools:
       matrix_default: deny
       forbid_private_modules: true
       allow_patterns: []
+gates:
+  # 符号级私有导入禁止（from x import _private）
+  imports_forbid_private_symbols: true
+  # Fail-Fast 禁止与行内豁免
+  failfast_forbid_dict_get_default: true
+  failfast_forbid_getattr_default: true
+  failfast_forbid_env_default: true
+  failfast_forbid_import_fallback: true
+  failfast_allow_comment_tags: ["allow fallback", "codeclinic: allow-fallback"]
+  # 导入环路不允许出现
+  imports_cycles_max: 0
+  # Public 出口无副作用
+  packages_public_no_side_effects: true
+  packages_public_side_effect_forbidden_calls: ["open", "subprocess.*", "os.system", "pathlib.Path.write_text", "pathlib.Path.write_bytes", "requests.*"]
+  # 非ABC方法禁止 NotImplementedError/pass
+  stubs_no_notimplemented_non_abc: true
+  # 红灯阶段失败类型约束（尽量以断言失败为主）
+  tests_red_failures_are_assertions: true
+gates:
+  # 符号级私有导入禁止（from x import _private）
+  imports_forbid_private_symbols: true
   stubs:
     provider: internal
     decorator_names: ["stub"]
@@ -401,6 +458,221 @@ def load_qa_config(path: str | Path) -> QAConfig:
     cfg.components.tests_dir_name = comp.get("tests_dir_name", cfg.components.tests_dir_name)
     cfg.components.dependency_scope = comp.get("dependency_scope", cfg.components.dependency_scope)
     cfg.components.require_self_stub_free = bool(comp.get("require_self_stub_free", cfg.components.require_self_stub_free))
+
+    # 支持 gates 下按检测类型的配置（不暴露具体工具），将其映射到内部 tools.* 配置
+    # 同时支持 linter 行宽从 formatter 行宽继承（若未显式设置）。
+    try:
+        g_fmt = gates.get("formatter", {}) if isinstance(gates.get("formatter", {}), dict) else {}
+        g_lin = gates.get("linter", {}) if isinstance(gates.get("linter", {}), dict) else {}
+        # formatter: line_length
+        fmt_ll_set = False
+        if "line_length" in g_fmt:
+            cfg.tools.formatter.line_length = int(g_fmt.get("line_length"))
+            fmt_ll_set = True
+        # linter: ruleset / line_length / docstyle
+        rs = g_lin.get("ruleset")
+        if isinstance(rs, list):
+            cfg.tools.linter.ruleset = [str(x) for x in rs]
+        lin_ll_set = False
+        if "line_length" in g_lin:
+            cfg.tools.linter.line_length = int(g_lin.get("line_length"))
+            lin_ll_set = True
+        if "docstyle_convention" in g_lin:
+            cfg.tools.linter.docstyle_convention = g_lin.get("docstyle_convention")
+        # 继承：若 linter 未设置行宽而 formatter 已设置，则使用 formatter 的行宽
+        if (not lin_ll_set) and fmt_ll_set:
+            cfg.tools.linter.line_length = cfg.tools.formatter.line_length
+    except Exception:
+        pass
+    # gates.typecheck.strict -> tools.typecheck.strict
+    try:
+        g_tc = gates.get("typecheck", {}) if isinstance(gates.get("typecheck", {}), dict) else {}
+        if "strict" in g_tc:
+            cfg.tools.typecheck.strict = bool(g_tc.get("strict"))
+        # typecheck.errors_max -> mypy_errors_max
+        if "errors_max" in g_tc:
+            cfg.gates.mypy_errors_max = int(g_tc.get("errors_max"))
+    except Exception:
+        pass
+
+    # gates.imports.* -> tools.deps.import_rules
+    try:
+        g_imp = gates.get("imports", {}) if isinstance(gates.get("imports", {}), dict) else {}
+        # Accept either flattened keys under imports or a nested 'matrix' rule
+        matrix = g_imp.get("matrix", g_imp.get("rules", {})) if isinstance(g_imp, dict) else {}
+        # matrix default 强制为 deny（严格白名单，固定不可配置）
+        cfg.tools.deps.import_rules.matrix_default = "deny"
+        # forbid private modules
+        fpm = matrix.get("forbid_private_modules", g_imp.get("forbid_private_modules", None))
+        if isinstance(fpm, bool):
+            cfg.tools.deps.import_rules.forbid_private_modules = fpm
+        # allow patterns
+        ap = matrix.get("allow_patterns", g_imp.get("allow_patterns", None))
+        if isinstance(ap, list):
+            tmp: list[tuple[str, str]] = []
+            for it in ap:
+                if isinstance(it, (list, tuple)) and len(it) == 2:
+                    tmp.append((str(it[0]), str(it[1])))
+            cfg.tools.deps.import_rules.allow_patterns = tmp
+        # aggregator rule (optional)
+        agg = g_imp.get("aggregator", {}) if isinstance(g_imp.get("aggregator", {}), dict) else {}
+        rva = agg.get("require_via_aggregator", g_imp.get("require_via_aggregator", None))
+        if isinstance(rva, bool):
+            cfg.tools.deps.import_rules.require_via_aggregator = rva
+        try:
+            aed = agg.get("allowed_external_depth", g_imp.get("allowed_external_depth", None))
+            if aed is not None:
+                cfg.tools.deps.import_rules.allowed_external_depth = int(aed)
+        except Exception:
+            pass
+        awl = agg.get("whitelist", g_imp.get("aggregator_whitelist", None))
+        if isinstance(awl, list):
+            cfg.tools.deps.import_rules.aggregator_whitelist = [str(x) for x in awl]
+        # forbid_private_symbols -> imports_forbid_private_symbols (gate-level)
+        fps = g_imp.get("forbid_private_symbols", None)
+        if isinstance(fps, bool):
+            cfg.gates.imports_forbid_private_symbols = fps
+        # cycles_max -> imports_cycles_max
+        try:
+            cyc = g_imp.get("cycles_max", None)
+            if cyc is not None:
+                cfg.gates.imports_cycles_max = int(cyc)
+        except Exception:
+            pass
+        # violations_max -> import_violations_max
+        if "violations_max" in g_imp:
+            cfg.gates.import_violations_max = int(g_imp.get("violations_max"))
+    except Exception:
+        pass
+    
+    # gates.formatter.clean -> formatter_clean
+    try:
+        g_fmt = gates.get("formatter", {}) if isinstance(gates.get("formatter", {}), dict) else {}
+        if "clean" in g_fmt:
+            cfg.gates.formatter_clean = bool(g_fmt.get("clean"))
+    except Exception:
+        pass
+
+    # gates.linter.errors_max -> linter_errors_max
+    try:
+        g_lin = gates.get("linter", {}) if isinstance(gates.get("linter", {}), dict) else {}
+        if "errors_max" in g_lin:
+            cfg.gates.linter_errors_max = int(g_lin.get("errors_max"))
+    except Exception:
+        pass
+
+    # gates.tests.coverage_min / allow_missing_component_tests / components_dep_stub_free_requires_green
+    try:
+        g_tests = gates.get("tests", {}) if isinstance(gates.get("tests", {}), dict) else {}
+        if "coverage_min" in g_tests:
+            cfg.gates.coverage_min = int(g_tests.get("coverage_min"))
+        if "allow_missing_component_tests" in g_tests:
+            cfg.gates.allow_missing_component_tests = bool(g_tests.get("allow_missing_component_tests"))
+        if "components_dep_stub_free_requires_green" in g_tests:
+            cfg.gates.components_dep_stub_free_requires_green = bool(
+                g_tests.get("components_dep_stub_free_requires_green")
+            )
+        if "red_failures_are_assertions" in g_tests:
+            cfg.gates.tests_red_failures_are_assertions = bool(g_tests.get("red_failures_are_assertions"))
+    except Exception:
+        pass
+
+    # gates.complexity.{max_file_loc, cc_max_rank_max, mi_min}
+    try:
+        g_cpx = gates.get("complexity", {}) if isinstance(gates.get("complexity", {}), dict) else {}
+        if "max_file_loc" in g_cpx:
+            cfg.gates.max_file_loc = int(g_cpx.get("max_file_loc"))
+        if "cc_max_rank_max" in g_cpx:
+            val = g_cpx.get("cc_max_rank_max")
+            if isinstance(val, str) and val.strip():
+                cfg.gates.cc_max_rank_max = val.strip().upper()
+        if "mi_min" in g_cpx:
+            try:
+                cfg.gates.mi_min = int(g_cpx.get("mi_min"))
+            except Exception:
+                cfg.gates.mi_min = None
+    except Exception:
+        pass
+
+    # gates.functions
+    try:
+        g_fn = gates.get("functions", {}) if isinstance(gates.get("functions", {}), dict) else {}
+        if "loc_max" in g_fn:
+            cfg.gates.fn_loc_max = int(g_fn.get("loc_max"))
+        if "args_max" in g_fn:
+            cfg.gates.fn_args_max = int(g_fn.get("args_max"))
+        if "nesting_max" in g_fn:
+            cfg.gates.fn_nesting_max = int(g_fn.get("nesting_max"))
+        if "count_docstrings" in g_fn:
+            cfg.gates.fn_count_docstrings = bool(g_fn.get("count_docstrings"))
+    except Exception:
+        pass
+
+    # gates.docs
+    try:
+        g_docs = gates.get("docs", {}) if isinstance(gates.get("docs", {}), dict) else {}
+        if "contracts_missing_max" in g_docs:
+            cfg.gates.doc_contracts_missing_max = int(g_docs.get("contracts_missing_max"))
+        reqs = g_docs.get("required_sections", None)
+        if isinstance(reqs, list):
+            cfg.gates.doc_required_sections = [str(x) for x in reqs]
+        if "case_sensitive" in g_docs:
+            cfg.gates.doc_case_sensitive = bool(g_docs.get("case_sensitive"))
+    except Exception:
+        pass
+
+    # gates.packages and nested exports
+    try:
+        g_pkg = gates.get("packages", {}) if isinstance(gates.get("packages", {}), dict) else {}
+        if "require_dunder_init" in g_pkg:
+            cfg.gates.packages_require_dunder_init = bool(g_pkg.get("require_dunder_init"))
+        mie = g_pkg.get("missing_init_exclude", None)
+        if isinstance(mie, list):
+            cfg.gates.packages_missing_init_exclude = [str(x) for x in mie]
+        # public no side effects
+        if "public_no_side_effects" in g_pkg:
+            cfg.gates.packages_public_no_side_effects = bool(g_pkg.get("public_no_side_effects"))
+        calls = g_pkg.get("public_side_effect_forbidden_calls", None)
+        if isinstance(calls, list):
+            cfg.gates.packages_public_side_effect_forbidden_calls = [str(x) for x in calls]
+        g_exp = g_pkg.get("exports", {}) if isinstance(g_pkg.get("exports", {}), dict) else {}
+        if "no_private" in g_exp:
+            cfg.gates.exports_no_private = bool(g_exp.get("no_private"))
+        if "require_nonempty_all" in g_exp:
+            cfg.gates.exports_require_nonempty_all = bool(g_exp.get("require_nonempty_all"))
+        ex_all = g_exp.get("nonempty_all_exclude", None)
+        if isinstance(ex_all, list):
+            cfg.gates.exports_nonempty_all_exclude = [str(x) for x in ex_all]
+    except Exception:
+        pass
+
+    # gates.tests_presence
+    try:
+        g_tp = gates.get("tests_presence", {}) if isinstance(gates.get("tests_presence", {}), dict) else {}
+        if "modules_require_named_tests" in g_tp:
+            cfg.gates.modules_require_named_tests = bool(g_tp.get("modules_require_named_tests"))
+        mte = g_tp.get("modules_named_tests_exclude", None)
+        if isinstance(mte, list):
+            cfg.gates.modules_named_tests_exclude = [str(x) for x in mte]
+    except Exception:
+        pass
+
+    # gates.failfast
+    try:
+        g_ff = gates.get("failfast", {}) if isinstance(gates.get("failfast", {}), dict) else {}
+        if "forbid_dict_get_default" in g_ff:
+            cfg.gates.failfast_forbid_dict_get_default = bool(g_ff.get("forbid_dict_get_default"))
+        if "forbid_getattr_default" in g_ff:
+            cfg.gates.failfast_forbid_getattr_default = bool(g_ff.get("forbid_getattr_default"))
+        if "forbid_env_default" in g_ff:
+            cfg.gates.failfast_forbid_env_default = bool(g_ff.get("forbid_env_default"))
+        if "forbid_import_fallback" in g_ff:
+            cfg.gates.failfast_forbid_import_fallback = bool(g_ff.get("forbid_import_fallback"))
+        tags = g_ff.get("allow_comment_tags", None)
+        if isinstance(tags, list):
+            cfg.gates.failfast_allow_comment_tags = [str(x) for x in tags]
+    except Exception:
+        pass
     return cfg
 
 
@@ -409,7 +681,36 @@ def write_qa_config(path: str | Path, force: bool = False) -> Path:
     if p.exists() and not force:
         # Do not overwrite; write example alongside
         example = p.with_name(p.stem + ".qa.example.yaml")
-        example.write_text(default_yaml(), encoding="utf-8")
+        example.write_text(_strict_template_or_default(), encoding="utf-8")
         return example
-    p.write_text(default_yaml(), encoding="utf-8")
+    p.write_text(_strict_template_or_default(), encoding="utf-8")
     return p
+
+
+def _strict_template_or_default() -> str:
+    """Load the packaged template (codeclinic.yaml) if available; otherwise use programmatic defaults."""
+    # Prefer importlib.resources for packaged access
+    try:
+        try:
+            from importlib.resources import files  # type: ignore
+        except Exception:
+            files = None  # type: ignore
+        if files is not None:
+            try:
+                pkg_root = files(__package__)  # codeclinic
+                pref = pkg_root / "templates" / "codeclinic.yaml"
+                return pref.read_text(encoding="utf-8")
+            except Exception:
+                pass
+    except Exception:
+        pass
+    # Fallback to file-system path relative to this module
+    try:
+        root = Path(__file__).parent / "templates"
+        pref = root / "codeclinic.yaml"
+        if pref.exists():
+            return pref.read_text(encoding="utf-8")
+    except Exception:
+        pass
+    # Final fallback to programmatic defaults
+    return default_yaml()

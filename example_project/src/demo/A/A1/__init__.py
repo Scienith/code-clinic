@@ -1,7 +1,7 @@
 # Package A1 - depends on A11 and A12 and common
-from example_project.A.A1.A11 import calculate_metrics, generate_report
-from example_project.A.A1.A12 import fetch_data, store_results
-from example_project.common import validate_permissions, log_activity
+from demo.A.A1.A11 import calculate_metrics, generate_report
+from demo.A.A1.A12 import fetch_data, store_results
+from demo.common import validate_permissions, log_activity
 
 def process_data(data):
     """Process raw data using various components."""

@@ -19,22 +19,21 @@ import importlib.resources as ir
 
 
 def _load_packaged_strict_yaml() -> str | None:
-    """优先从打包资源读取严格基线模板。
-    返回 None 表示资源不存在（例如旧版本包）。
-    """
+    """优先从打包资源读取配置模板（codeclinic.yaml）。若不可用返回 None。"""
     # Try importlib.resources (py>=3.9)
     try:
         pkg = 'codeclinic'
         # New API
         try:
-            data = (ir.files(pkg) / 'templates' / 'strict_codeclinic.yaml').read_text(encoding='utf-8')
-            return data
+            base = ir.files(pkg) / 'templates'
+            pref = base / 'codeclinic.yaml'
+            if pref.exists():
+                return pref.read_text(encoding='utf-8')
         except Exception:
             pass
         # Fallback to legacy API
         try:
-            data = ir.read_text(pkg + '.templates', 'strict_codeclinic.yaml', encoding='utf-8')
-            return data
+            return ir.read_text(pkg + '.templates', 'codeclinic.yaml', encoding='utf-8')
         except Exception:
             pass
     except Exception:
@@ -67,9 +66,9 @@ def init_config(output_path: Optional[Path] = None, force: bool = False) -> Path
     # 仅支持复制严格配置（打包资源）；若未找到则报错退出
     strict_text = _load_packaged_strict_yaml()
     if not strict_text:
-        print("❌ 未找到打包的严格基线模板: codeclinic/templates/strict_codeclinic.yaml")
+        print("❌ 未找到打包的基线模板: codeclinic/templates/codeclinic.yaml")
         print("   请升级 CodeClinic 版本或联系维护者补充模板；当前行为仅支持复制该严格配置，不再生成示例模板。")
-        raise FileNotFoundError("strict_codeclinic.yaml resource missing")
+        raise FileNotFoundError("codeclinic.yaml template resource missing")
     config_content = strict_text
     
     # 写入文件

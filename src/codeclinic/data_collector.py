@@ -271,16 +271,24 @@ def _analyze_node_imports(node: NodeInfo, all_nodes: Dict[str, NodeInfo]) -> Non
                 base_parts = container_parts[: -(level - 1)] if (level - 1) <= len(container_parts) else []
 
             if node_ast.module:
-                tail_parts = node_ast.module.split('.') if node_ast.module else []
-                abs_mod = '.'.join([p for p in (*base_parts, *tail_parts) if p])
-                if abs_mod:
-                    imports.add(abs_mod)
-                # 也添加具体导入，可能是子模块
-                for alias in node_ast.names:
-                    if alias.name != '*':
-                        full_name = '.'.join([p for p in (*base_parts, *tail_parts, alias.name) if p])
-                        if full_name:
-                            imports.add(full_name)
+                # 绝对导入（level=0）：直接使用给定模块路径；相对导入：基于 base_parts
+                if level == 0:
+                    module_base = node_ast.module
+                    imports.add(module_base)
+                    for alias in node_ast.names:
+                        if alias.name != '*':
+                            imports.add(f"{module_base}.{alias.name}")
+                else:
+                    tail_parts = node_ast.module.split('.') if node_ast.module else []
+                    abs_mod = '.'.join([p for p in (*base_parts, *tail_parts) if p])
+                    if abs_mod:
+                        imports.add(abs_mod)
+                    # 也添加具体导入，可能是子模块
+                    for alias in node_ast.names:
+                        if alias.name != '*':
+                            full_name = '.'.join([p for p in (*base_parts, *tail_parts, alias.name) if p])
+                            if full_name:
+                                imports.add(full_name)
             else:
                 # from . import X 场景：别名即为目标
                 for alias in node_ast.names:

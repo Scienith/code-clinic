@@ -131,21 +131,17 @@ def render_violations_graph(
         label = f"{icon} {display_name}\n{node.node_type.value}"
         dot.node(name, label=label, fillcolor="#FFFFFF", shape="box", style="rounded,filled")
 
-    # 添加合法边（绿色）
+    # 不再绘制“文件夹/包含”关系，只展示导入依赖关系
+
+    # 再画合法导入边（绿色）
     for src, dst in sorted(legal_edges):
         if src in nodes and dst in nodes:
             dot.edge(src, dst, color="#4CAF50", style="solid", penwidth="2")
 
-    # 添加违规边（红色）
+    # 最后画违规导入边（红色，加粗置顶）
     for src, dst in sorted(violation_edges):
         if src in nodes and dst in nodes:
             dot.edge(src, dst, color="#F44336", style="solid", penwidth="3")
-
-    # 可选：添加包含关系（虚线灰色），仅用于结构辅助，不代表导入
-    if child_edges:
-        for parent, child in sorted(child_edges):
-            if parent in nodes and child in nodes and (parent, child) not in legal_edges and (parent, child) not in violation_edges:
-                dot.edge(parent, child, color="#DDDDDD", style="dashed", penwidth="1")
 
     dot_path = f"{output_base}.dot"
     svg_path = f"{output_base}.{fmt}"
@@ -169,7 +165,7 @@ def render_violations_tree_graph(
 ) -> Tuple[str, str]:
     """
     渲染基于“包+模块”的树形依赖图：
-    - 树结构：使用 NodeInfo.parent 生成父子（包含）关系；根用虚拟节点 "__" 统一挂载
+    - 仅展示导入依赖关系；不再绘制文件夹父子（包含）关系或虚拟根节点
     - 节点：📦=package，📄=module
     - 叠加依赖连线：绿色=合法，红色=违规（保持不影响布局 constraint=false）
     """
@@ -188,31 +184,7 @@ def render_violations_tree_graph(
         label = f"{icon} {display_name}\n{kind}"
         dot.node(name, label=label, fillcolor="#FFFFFF", shape="box", style="rounded,filled")
 
-    # 根节点选择：若存在名称为 "" 的包（显示为 root），直接作为根；否则引入虚拟根 "__"
-    root_name = "" if ("" in nodes and nodes[""] and nodes[""].node_type == NodeType.PACKAGE) else "__"
-    if root_name == "__":
-        dot.node(root_name, label="__", shape="ellipse", style="filled", fillcolor="#FAFAFA")
-
-    # 构造树结构：优先使用 NodeInfo.parent；若无 parent，则挂到根
-    # 同时可融合 child_edges 辅助（避免缺失）
-    added_tree_edges: Set[Tuple[str, str]] = set()
-    for name, node in nodes.items():
-        parent = node.parent
-        if parent and parent in nodes:
-            dot.edge(parent, name, color="#BDBDBD", style="dashed", penwidth="1", constraint="true")
-            added_tree_edges.add((parent, name))
-        else:
-            # 避免根节点指向自身（"root" -> "root"）
-            if name != root_name:
-                dot.edge(root_name, name, color="#BDBDBD", style="dashed", penwidth="1", constraint="true")
-                added_tree_edges.add((root_name, name))
-
-    # 融合 child_edges（如果传入），补齐遗漏
-    if child_edges:
-        for parent, child in sorted(child_edges):
-            if parent in nodes and child in nodes and (parent, child) not in added_tree_edges:
-                dot.edge(parent, child, color="#BDBDBD", style="dashed", penwidth="1", constraint="true")
-                added_tree_edges.add((parent, child))
+    # 不绘制任何“包含”关系，仅叠加导入依赖边
 
     # 叠加依赖边：模块/包之间的直接依赖（不聚合，保留粒度）
     for src, dst in sorted(legal_edges):

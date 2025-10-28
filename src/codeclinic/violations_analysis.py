@@ -232,11 +232,24 @@ def _generate_violations_graph(
         from .graphviz_render import render_violations_graph
         
         svg_path = output_dir / "violations_graph.svg"
-        
+        legal = set(violations_data["legal_edges"]) if isinstance(violations_data.get("legal_edges"), set) else set(violations_data.get("legal_edges", []))
+        viol = set(violations_data["violation_edges"]) if isinstance(violations_data.get("violation_edges"), set) else set(violations_data.get("violation_edges", []))
+        # Augment: treat package __init__.py re-exports (parent -> descendant) as import edges for visualization
+        try:
+            reexport_edges = set()
+            for name, node in project_data.nodes.items():
+                if getattr(node, 'node_type', None) and node.node_type.value == 'package':
+                    for imp in getattr(node, 'imports', set()):
+                        if imp in project_data.nodes and (imp.startswith(name + '.') or imp == name):
+                            reexport_edges.add((name, imp))
+            legal |= reexport_edges
+        except Exception:
+            pass
+
         render_violations_graph(
             project_data.nodes,
-            violations_data["legal_edges"],
-            violations_data["violation_edges"],
+            legal,
+            viol,
             str(svg_path.with_suffix('')),
             child_edges=project_data.child_edges,
         )

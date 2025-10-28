@@ -1,4 +1,4 @@
-from example_project.A.A1 import process_data
+from demo.A.A1 import process_data
 
 
 def test_process_data_smoke():
@@ -10,4 +10,3 @@ def test_process_data_smoke():
 def test_intentional_failure_for_demo():
     # This failing test demonstrates that when deps contain stubs, gate is relaxed
     assert 1 == 2
-

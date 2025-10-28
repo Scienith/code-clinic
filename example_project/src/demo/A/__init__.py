@@ -1,8 +1,8 @@
 # Package A - depends on A1 and A2 and common
-from example_project.A.A1 import process_data
-from example_project.A.A2 import validate_input, transform_data
-from example_project.A.A1.A11 import calculate_metrics, generate_report
-from example_project.common import BaseProcessor, get_base_config
+from demo.A.A1 import process_data
+from demo.A.A2 import validate_input, transform_data
+from demo.A.A1.A11 import calculate_metrics, generate_report
+from demo.common import BaseProcessor, get_base_config
 from codeclinic.stub import stub
 
 def main_workflow(data):

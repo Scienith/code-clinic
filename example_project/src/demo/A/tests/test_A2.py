@@ -1,4 +1,4 @@
-from example_project.A.A2 import validate_input
+from demo.A.A2 import validate_input
 
 
 def test_validate_input_true():
@@ -7,4 +7,3 @@ def test_validate_input_true():
 
 def test_validate_input_false():
     assert validate_input("oops") is False
-

@@ -1,6 +1,6 @@
 # Module A2 - 50% of functions have @stub decorator
 from codeclinic import stub
-from example_project.common import setup_logging, authenticate_user
+from demo.common import setup_logging, authenticate_user
 
 def validate_input(data):
     """Validate input data format."""
