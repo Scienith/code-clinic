@@ -222,6 +222,12 @@ class GatesSection:
     runtime_validation_allow_comment_tags: List[str] = field(
         default_factory=lambda: ["codeclinic: allow-no-validate-call"]
     )
+    # Classes: enforce super().__init__ in subclass __init__
+    classes_require_super_init: bool = False
+    classes_super_init_exclude: List[str] = field(default_factory=list)
+    classes_super_init_allow_comment_tags: List[str] = field(
+        default_factory=lambda: ["codeclinic: allow-no-super-init"]
+    )
 
 
 @dataclass
@@ -884,6 +890,27 @@ def load_qa_config(path: str | Path) -> QAConfig:
         tags = g_ff.get("allow_comment_tags", None)
         if isinstance(tags, list):
             cfg.gates.failfast_allow_comment_tags = [str(x) for x in tags]
+    except Exception:
+        pass
+
+    # gates.classes
+    try:
+        gates = data.get("gates") or {}
+        g_cls = (
+            gates.get("classes", {})
+            if isinstance(gates.get("classes", {}), dict)
+            else {}
+        )
+        if "require_super_init" in g_cls:
+            cfg.gates.classes_require_super_init = bool(
+                g_cls.get("require_super_init")
+            )
+        ex = g_cls.get("exclude", None)
+        if isinstance(ex, list):
+            cfg.gates.classes_super_init_exclude = [str(x) for x in ex]
+        tags = g_cls.get("allow_comment_tags", None)
+        if isinstance(tags, list):
+            cfg.gates.classes_super_init_allow_comment_tags = [str(x) for x in tags]
     except Exception:
         pass
     # gates.runtime_validation

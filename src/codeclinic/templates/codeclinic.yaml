@@ -175,15 +175,21 @@ gates:
 
   # 运行时校验（Pydantic v2 validate_call）
   runtime_validation:
-    # 是否要求所有公开函数/方法必须使用 @validate_call
-    require_validate_call: false
+    # 是否要求所有函数/方法（含 private）必须使用 @validate_call
+    require_validate_call: true
     # 是否要求 validate_call 为最内层装饰器（最接近 def），避免签名被其他装饰器隐藏
-    require_innermost: false
+    require_innermost: true
     # 可选排除（glob）
     exclude: []
-    # 跳过检查的函数：私有、魔术方法、属性
-    skip_private: true
+    # 跳过检查的函数：魔术方法、属性（不跳过 private）
+    skip_private: false
     skip_magic: true
     skip_properties: true
     # 行内豁免标签（出现在 def 行内即可）
     allow_comment_tags: ["codeclinic: allow-no-validate-call"]
+
+  # 类构造约束：子类 __init__ 必须调用 super().__init__
+  classes:
+    require_super_init: false
+    exclude: []
+    allow_comment_tags: ["codeclinic: allow-no-super-init"]

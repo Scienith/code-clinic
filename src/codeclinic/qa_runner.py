@@ -195,6 +195,10 @@ def qa_run(
         artifacts_dir,
         results.get("logs", {}).get("pytest"),
     )
+    # Classes: super().__init__ in subclass __init__
+    superinit_missing, superinit_report = _ext_classes_require_super_init(
+        cfg, artifacts_dir
+    )
     results.setdefault("metrics", {})["function_metrics_ext"] = {
         "violations": fn_over_count,
         "report": str(fn_report) if fn_report else None,
@@ -251,6 +255,11 @@ def qa_run(
         "failures": junit_failures,
         "errors": junit_errors,
         "status": "passed" if (junit_errors or 0) == 0 else "failed",
+    }
+    results["metrics"]["classes_super_init"] = {
+        "missing": superinit_missing,
+        "report": str(superinit_report) if superinit_report else None,
+        "status": "passed" if superinit_missing == 0 else "failed",
     }
 
     # Gates evaluation
@@ -397,6 +406,10 @@ def qa_run(
         and (junit_errors or 0) > 0
     ):
         gates_failed.append("tests_red_failures_are_assertions")
+    if bool(getattr(g, "classes_require_super_init", False)) and (
+        superinit_missing > 0
+    ):
+        gates_failed.append("classes_require_super_init")
     # Runtime validation gates
     if bool(getattr(g, "runtime_validation_require_validate_call", False)) and (
         rv_missing > 0
@@ -1856,6 +1869,30 @@ def _ext_failfast(cfg: QAConfig, artifacts_dir: Path) -> tuple[int, Path]:
                                 "type": "key_fallback",
                             }
                         )
+        # 'in obj.__dict__' probing for attribute existence
+        if bool(getattr(cfg.gates, "failfast_forbid_attr_fallback", True)):
+            for n in [x for x in _ast_ext.walk(tree) if isinstance(x, _ast_ext.Compare)]:
+                # pattern: <left> in <obj>.__dict__  OR  <left> not in <obj>.__dict__
+                try:
+                    ops = getattr(n, "ops", []) or []
+                    if not ops:
+                        continue
+                    comp = getattr(n, "comparators", []) or []
+                    if not comp:
+                        continue
+                    right = comp[0]
+                    if isinstance(right, _ast_ext.Attribute) and right.attr == "__dict__":
+                        if any(isinstance(op, (_ast_ext.In, _ast_ext.NotIn)) for op in ops):
+                            if not _line_has_allow_comment(src, getattr(n, "lineno", 0) or 0, tags):
+                                violations.append(
+                                    {
+                                        "file": f,
+                                        "lineno": getattr(n, "lineno", 0) or 0,
+                                        "type": "attr_dict_probe",
+                                    }
+                                )
+                except Exception:
+                    pass
     report = artifacts_dir / "failfast_violations.json"
     report.write_text(
         json.dumps({"violations": violations}, ensure_ascii=False, indent=2),
@@ -2441,3 +2478,83 @@ def _ext_runtime_validate_call(cfg: QAConfig, artifacts_dir: Path) -> tuple[int,
         encoding="utf-8",
     )
     return len(missing), len(order_warn), report
+
+
+def _ext_classes_require_super_init(cfg: QAConfig, artifacts_dir: Path) -> tuple[int, Path]:
+    files = _ext_collect_files(cfg)
+    import fnmatch as _fnm
+    ex = list(getattr(cfg.gates, "classes_super_init_exclude", []) or [])
+    if ex:
+        files = [f for f in files if not any(_fnm.fnmatch(str(f), pat) for pat in ex)]
+    tags = list(getattr(cfg.gates, "classes_super_init_allow_comment_tags", []) or [])
+
+    def _has_allow_comment(src: str, node: _ast_ext.AST) -> bool:
+        try:
+            line = src.splitlines()[max(0, getattr(node, "lineno", 1) - 1)]
+            ls = line.lower()
+            return any(t.lower() in ls for t in tags)
+        except Exception:
+            return False
+
+    def _calls_super_init(func_node: _ast_ext.FunctionDef | _ast_ext.AsyncFunctionDef) -> bool:
+        for n in _ast_ext.walk(func_node):
+            if isinstance(n, _ast_ext.Call):
+                fn = getattr(n, "func", None)
+                # super().__init__(...)
+                if isinstance(fn, _ast_ext.Attribute) and fn.attr == "__init__":
+                    val = fn.value
+                    if isinstance(val, _ast_ext.Call):
+                        callee = getattr(val, "func", None)
+                        if isinstance(callee, _ast_ext.Name) and callee.id == "super":
+                            return True
+        return False
+
+    violations: list[dict[str, _Any]] = []
+    for f in files:
+        try:
+            src = Path(f).read_text(encoding="utf-8")
+            tree = _ast_ext.parse(src)
+        except Exception:
+            continue
+        for cls in [n for n in _ast_ext.walk(tree) if isinstance(n, _ast_ext.ClassDef)]:
+            # only subclasses (has base other than built-in 'object')
+            bases = getattr(cls, "bases", []) or []
+            if not bases:
+                continue
+            # ignore pure object subclass explicitly declared
+            is_only_object = False
+            try:
+                if len(bases) == 1:
+                    b = bases[0]
+                    if isinstance(b, _ast_ext.Name) and b.id == "object":
+                        is_only_object = True
+            except Exception:
+                pass
+            if is_only_object:
+                continue
+            inits = [
+                n
+                for n in getattr(cls, "body", []) or []
+                if isinstance(n, (_ast_ext.FunctionDef, _ast_ext.AsyncFunctionDef))
+                and getattr(n, "name", "") == "__init__"
+            ]
+            if not inits:
+                continue
+            for init in inits:
+                if _has_allow_comment(src, init):
+                    continue
+                if not _calls_super_init(init):
+                    violations.append(
+                        {
+                            "file": f,
+                            "class": getattr(cls, "name", ""),
+                            "lineno": getattr(init, "lineno", 0) or 0,
+                        }
+                    )
+
+    report = artifacts_dir / "super_init_violations.json"
+    report.write_text(
+        json.dumps({"missing_super_init": violations}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return len(violations), report
