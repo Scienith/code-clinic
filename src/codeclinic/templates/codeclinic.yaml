@@ -168,6 +168,9 @@ gates:
     forbid_hasattr: true
     forbid_env_default: true
     forbid_import_fallback: true
+    # New: forbid try/except AttributeError/KeyError as fallback
+    forbid_attr_fallback: true
+    forbid_key_fallback: true
     allow_comment_tags: ["allow fallback", "codeclinic: allow-fallback"]
 
   # 运行时校验（Pydantic v2 validate_call）

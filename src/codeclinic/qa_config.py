@@ -148,6 +148,9 @@ class GatesSection:
     failfast_forbid_getattr_default: bool = True
     failfast_forbid_env_default: bool = True
     failfast_forbid_import_fallback: bool = True
+    # New: forbid try/except fallback for missing attributes or keys
+    failfast_forbid_attr_fallback: bool = True
+    failfast_forbid_key_fallback: bool = True
     # Aggressive bans (any usage, not just with default)
     failfast_forbid_dict_get_any: bool = False
     failfast_forbid_getattr_any: bool = False
@@ -861,6 +864,14 @@ def load_qa_config(path: str | Path) -> QAConfig:
         if "forbid_import_fallback" in g_ff:
             cfg.gates.failfast_forbid_import_fallback = bool(
                 g_ff.get("forbid_import_fallback")
+            )
+        if "forbid_attr_fallback" in g_ff:
+            cfg.gates.failfast_forbid_attr_fallback = bool(
+                g_ff.get("forbid_attr_fallback")
+            )
+        if "forbid_key_fallback" in g_ff:
+            cfg.gates.failfast_forbid_key_fallback = bool(
+                g_ff.get("forbid_key_fallback")
             )
         if "forbid_hasattr" in g_ff:
             cfg.gates.failfast_forbid_hasattr = bool(g_ff.get("forbid_hasattr"))

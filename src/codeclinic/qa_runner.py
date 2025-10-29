@@ -374,6 +374,8 @@ def qa_run(
                     or g.failfast_forbid_getattr_default
                     or g.failfast_forbid_env_default
                     or g.failfast_forbid_import_fallback
+                    or getattr(g, "failfast_forbid_attr_fallback", False)
+                    or getattr(g, "failfast_forbid_key_fallback", False)
                 )
             ]
         )
@@ -1808,6 +1810,50 @@ def _ext_failfast(cfg: QAConfig, artifacts_dir: Path) -> tuple[int, Path]:
                                 "file": f,
                                 "lineno": getattr(h, "lineno", 0) or 0,
                                 "type": "import_fallback",
+                            }
+                        )
+        # try/except AttributeError fallback for missing attributes
+        if bool(getattr(cfg.gates, "failfast_forbid_attr_fallback", True)):
+            for t in [x for x in _ast_ext.walk(tree) if isinstance(x, _ast_ext.Try)]:
+                for h in getattr(t, "handlers", []) or []:
+                    tp = getattr(h, "type", None)
+                    name = ""
+                    if isinstance(tp, _ast_ext.Name):
+                        name = tp.id
+                    elif isinstance(tp, _ast_ext.Attribute):
+                        name = tp.attr
+                    if name == "AttributeError":
+                        if _line_has_allow_comment(
+                            src, getattr(t, "lineno", 0) or 0, tags
+                        ):
+                            continue
+                        violations.append(
+                            {
+                                "file": f,
+                                "lineno": getattr(h, "lineno", 0) or 0,
+                                "type": "attr_fallback",
+                            }
+                        )
+        # try/except KeyError fallback for missing dict keys
+        if bool(getattr(cfg.gates, "failfast_forbid_key_fallback", True)):
+            for t in [x for x in _ast_ext.walk(tree) if isinstance(x, _ast_ext.Try)]:
+                for h in getattr(t, "handlers", []) or []:
+                    tp = getattr(h, "type", None)
+                    name = ""
+                    if isinstance(tp, _ast_ext.Name):
+                        name = tp.id
+                    elif isinstance(tp, _ast_ext.Attribute):
+                        name = tp.attr
+                    if name == "KeyError":
+                        if _line_has_allow_comment(
+                            src, getattr(t, "lineno", 0) or 0, tags
+                        ):
+                            continue
+                        violations.append(
+                            {
+                                "file": f,
+                                "lineno": getattr(h, "lineno", 0) or 0,
+                                "type": "key_fallback",
                             }
                         )
     report = artifacts_dir / "failfast_violations.json"
