@@ -186,6 +186,10 @@ def qa_run(
     pubse_count, pubse_report = _ext_public_no_side_effects(cfg, artifacts_dir)
     cycles_count, cycles_report = _ext_import_cycles(cfg, artifacts_dir, project_data)
     notimpl_count, notimpl_report = _ext_stubs_no_notimplemented(cfg, artifacts_dir)
+    # New: validate_call runtime validation
+    rv_missing, rv_order_warn, rv_report = _ext_runtime_validate_call(
+        cfg, artifacts_dir
+    )
     junit_failures, junit_errors = _ext_junit_failure_types(
         results.get("metrics", {}).get("tests", {}).get("coverage_xml"),
         artifacts_dir,
@@ -232,6 +236,16 @@ def qa_run(
         "violations": notimpl_count,
         "report": str(notimpl_report) if notimpl_report else None,
         "status": "passed" if notimpl_count == 0 else "failed",
+    }
+    results["metrics"]["runtime_validation"] = {
+        "missing": rv_missing,
+        "order_warnings": rv_order_warn,
+        "report": str(rv_report) if rv_report else None,
+        "status": (
+            "passed"
+            if (rv_missing == 0 and rv_order_warn == 0)
+            else "failed"
+        ),
     }
     results["metrics"]["tests_junit_types"] = {
         "failures": junit_failures,
@@ -381,6 +395,15 @@ def qa_run(
         and (junit_errors or 0) > 0
     ):
         gates_failed.append("tests_red_failures_are_assertions")
+    # Runtime validation gates
+    if bool(getattr(g, "runtime_validation_require_validate_call", False)) and (
+        rv_missing > 0
+    ):
+        gates_failed.append("runtime_validation_require_validate_call")
+    if bool(getattr(g, "runtime_validation_require_innermost", False)) and (
+        rv_order_warn > 0
+    ):
+        gates_failed.append("runtime_validation_require_innermost")
 
     results["gates_failed"] = gates_failed
     results["status"] = "passed" if not gates_failed else "failed"
@@ -2259,3 +2282,116 @@ def _ext_exports_require_nonempty_all(
 """
 GitHub Actions and Makefile scaffolding intentionally not provided by CodeClinic.
 """
+
+# --- New: runtime validation (pydantic.validate_call) ---
+def _ext_runtime_validate_call(cfg: QAConfig, artifacts_dir: Path) -> tuple[int, int, Path]:
+    files = _ext_collect_files(cfg)
+    # Apply extra excludes
+    import fnmatch as _fnm
+    extra_ex = list(getattr(cfg.gates, "runtime_validation_exclude", []) or [])
+    if extra_ex:
+        filtered = []
+        for f in files:
+            p = str(f)
+            if any(_fnm.fnmatch(p, pat) for pat in extra_ex):
+                continue
+            filtered.append(f)
+        files = filtered
+
+    skip_private = bool(getattr(cfg.gates, "runtime_validation_skip_private", True))
+    skip_magic = bool(getattr(cfg.gates, "runtime_validation_skip_magic", True))
+    skip_props = bool(getattr(cfg.gates, "runtime_validation_skip_properties", True))
+    tags = list(getattr(cfg.gates, "runtime_validation_allow_comment_tags", []) or [])
+
+    def _dotted_name(dec: _ast_ext.AST) -> str:
+        # Convert decorator AST to dotted text
+        try:
+            if isinstance(dec, _ast_ext.Name):
+                return dec.id
+            if isinstance(dec, _ast_ext.Attribute):
+                parts = []
+                cur = dec
+                while isinstance(cur, _ast_ext.Attribute):
+                    parts.append(cur.attr)
+                    cur = cur.value
+                if isinstance(cur, _ast_ext.Name):
+                    parts.append(cur.id)
+                parts.reverse()
+                return ".".join(parts)
+            if isinstance(dec, _ast_ext.Call):
+                return _dotted_name(dec.func)
+        except Exception:
+            return ""
+        return ""
+
+    def _is_property(decorators: list[_ast_ext.AST]) -> bool:
+        for d in decorators:
+            dn = _dotted_name(d)
+            if dn.endswith("property") or dn.endswith("cached_property"):
+                return True
+        return False
+
+    def _has_allow_comment(src: str, node: _ast_ext.AST) -> bool:
+        try:
+            line = src.splitlines()[max(0, getattr(node, "lineno", 1) - 1)]
+            ls = line.lower()
+            return any(t.lower() in ls for t in tags)
+        except Exception:
+            return False
+
+    missing: list[dict[str, _Any]] = []
+    order_warn: list[dict[str, _Any]] = []
+
+    for f in files:
+        try:
+            src = Path(f).read_text(encoding="utf-8")
+            tree = _ast_ext.parse(src)
+        except Exception:
+            continue
+        for node in [
+            n
+            for n in _ast_ext.walk(tree)
+            if isinstance(n, (_ast_ext.FunctionDef, _ast_ext.AsyncFunctionDef))
+        ]:
+            name = getattr(node, "name", "")
+            # Skip conditions
+            if skip_magic and (name.startswith("__") and name.endswith("__")):
+                continue
+            if skip_private and name.startswith("_"):
+                continue
+            if skip_props and _is_property(getattr(node, "decorator_list", []) or []):
+                continue
+            if _has_allow_comment(src, node):
+                continue
+            decorators = getattr(node, "decorator_list", []) or []
+            dotted = [_dotted_name(d) for d in decorators]
+            has_vc = any(d == "validate_call" or d.endswith(".validate_call") for d in dotted)
+            if not has_vc:
+                missing.append({"file": f, "name": name, "lineno": getattr(node, "lineno", 0) or 0})
+                continue
+            # Order checking: require innermost (last in list)
+            try:
+                last = dotted[-1] if dotted else ""
+            except Exception:
+                last = ""
+            if bool(getattr(cfg.gates, "runtime_validation_require_innermost", False)):
+                if not (last == "validate_call" or last.endswith(".validate_call")):
+                    order_warn.append(
+                        {
+                            "file": f,
+                            "name": name,
+                            "lineno": getattr(node, "lineno", 0) or 0,
+                            "decorators": dotted,
+                        }
+                    )
+
+    report = artifacts_dir / "validate_call_missing.json"
+    report.write_text(
+        json.dumps(
+            {"missing": missing, "order_warnings": order_warn},
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return len(missing), len(order_warn), report

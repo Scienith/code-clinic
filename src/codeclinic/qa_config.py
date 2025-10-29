@@ -209,6 +209,16 @@ class GatesSection:
     # 是否将 Docstring 行计入函数行数统计
     fn_count_docstrings: bool = True
     exports_no_private: bool = True
+    # Runtime validation (pydantic.validate_call)
+    runtime_validation_require_validate_call: bool = False
+    runtime_validation_require_innermost: bool = False
+    runtime_validation_exclude: List[str] = field(default_factory=list)
+    runtime_validation_skip_private: bool = True
+    runtime_validation_skip_magic: bool = True
+    runtime_validation_skip_properties: bool = True
+    runtime_validation_allow_comment_tags: List[str] = field(
+        default_factory=lambda: ["codeclinic: allow-no-validate-call"]
+    )
 
 
 @dataclass
@@ -863,6 +873,40 @@ def load_qa_config(path: str | Path) -> QAConfig:
         tags = g_ff.get("allow_comment_tags", None)
         if isinstance(tags, list):
             cfg.gates.failfast_allow_comment_tags = [str(x) for x in tags]
+    except Exception:
+        pass
+    # gates.runtime_validation
+    try:
+        gates = data.get("gates") or {}
+        g_rv = (
+            gates.get("runtime_validation", {})
+            if isinstance(gates.get("runtime_validation", {}), dict)
+            else {}
+        )
+        if "require_validate_call" in g_rv:
+            cfg.gates.runtime_validation_require_validate_call = bool(
+                g_rv.get("require_validate_call")
+            )
+        if "require_innermost" in g_rv:
+            cfg.gates.runtime_validation_require_innermost = bool(
+                g_rv.get("require_innermost")
+            )
+        ex = g_rv.get("exclude")
+        if isinstance(ex, list):
+            cfg.gates.runtime_validation_exclude = [str(x) for x in ex]
+        if "skip_private" in g_rv:
+            cfg.gates.runtime_validation_skip_private = bool(
+                g_rv.get("skip_private")
+            )
+        if "skip_magic" in g_rv:
+            cfg.gates.runtime_validation_skip_magic = bool(g_rv.get("skip_magic"))
+        if "skip_properties" in g_rv:
+            cfg.gates.runtime_validation_skip_properties = bool(
+                g_rv.get("skip_properties")
+            )
+        tags = g_rv.get("allow_comment_tags")
+        if isinstance(tags, list):
+            cfg.gates.runtime_validation_allow_comment_tags = [str(x) for x in tags]
     except Exception:
         pass
     return cfg

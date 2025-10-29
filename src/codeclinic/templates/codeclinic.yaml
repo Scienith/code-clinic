@@ -169,3 +169,18 @@ gates:
     forbid_env_default: true
     forbid_import_fallback: true
     allow_comment_tags: ["allow fallback", "codeclinic: allow-fallback"]
+
+  # 运行时校验（Pydantic v2 validate_call）
+  runtime_validation:
+    # 是否要求所有公开函数/方法必须使用 @validate_call
+    require_validate_call: false
+    # 是否要求 validate_call 为最内层装饰器（最接近 def），避免签名被其他装饰器隐藏
+    require_innermost: false
+    # 可选排除（glob）
+    exclude: []
+    # 跳过检查的函数：私有、魔术方法、属性
+    skip_private: true
+    skip_magic: true
+    skip_properties: true
+    # 行内豁免标签（出现在 def 行内即可）
+    allow_comment_tags: ["codeclinic: allow-no-validate-call"]
