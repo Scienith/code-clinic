@@ -228,6 +228,12 @@ class GatesSection:
     classes_super_init_allow_comment_tags: List[str] = field(
         default_factory=lambda: ["codeclinic: allow-no-super-init"]
     )
+    # Project layout: enforce src layout (exactly one top-level package under src)
+    project_src_single_package: bool = False
+    project_src_dir_name: str = "src"
+    project_src_ignore_dirs: List[str] = field(
+        default_factory=lambda: ["__pycache__", ".venv", "venv", "migrations", "tests"]
+    )
 
 
 @dataclass
@@ -911,6 +917,26 @@ def load_qa_config(path: str | Path) -> QAConfig:
         tags = g_cls.get("allow_comment_tags", None)
         if isinstance(tags, list):
             cfg.gates.classes_super_init_allow_comment_tags = [str(x) for x in tags]
+    except Exception:
+        pass
+
+    # gates.project
+    try:
+        gates = data.get("gates") or {}
+        g_prj = (
+            gates.get("project", {})
+            if isinstance(gates.get("project", {}), dict)
+            else {}
+        )
+        if "src_single_package" in g_prj:
+            cfg.gates.project_src_single_package = bool(
+                g_prj.get("src_single_package")
+            )
+        if "src_dir_name" in g_prj:
+            cfg.gates.project_src_dir_name = str(g_prj.get("src_dir_name"))
+        ig = g_prj.get("src_ignore_dirs", None)
+        if isinstance(ig, list):
+            cfg.gates.project_src_ignore_dirs = [str(x) for x in ig]
     except Exception:
         pass
     # gates.runtime_validation

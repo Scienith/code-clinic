@@ -193,3 +193,9 @@ gates:
     require_super_init: false
     exclude: []
     allow_comment_tags: ["codeclinic: allow-no-super-init"]
+
+  # 项目结构：强制 src 布局（src 下仅一个顶级包）
+  project:
+    src_single_package: true
+    src_dir_name: "src"
+    src_ignore_dirs: ["__pycache__", ".venv", "venv", "migrations", "tests"]

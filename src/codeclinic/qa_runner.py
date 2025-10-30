@@ -199,6 +199,10 @@ def qa_run(
     superinit_missing, superinit_report = _ext_classes_require_super_init(
         cfg, artifacts_dir
     )
+    # Project layout: src contains exactly one top-level package
+    src_layout_viol, src_layout_report = _ext_project_src_single_package(
+        cfg, artifacts_dir
+    )
     results.setdefault("metrics", {})["function_metrics_ext"] = {
         "violations": fn_over_count,
         "report": str(fn_report) if fn_report else None,
@@ -260,6 +264,11 @@ def qa_run(
         "missing": superinit_missing,
         "report": str(superinit_report) if superinit_report else None,
         "status": "passed" if superinit_missing == 0 else "failed",
+    }
+    results["metrics"]["project_src_layout"] = {
+        "violations": src_layout_viol,
+        "report": str(src_layout_report) if src_layout_report else None,
+        "status": "passed" if src_layout_viol == 0 else "failed",
     }
 
     # Gates evaluation
@@ -410,6 +419,10 @@ def qa_run(
         superinit_missing > 0
     ):
         gates_failed.append("classes_require_super_init")
+    if bool(getattr(g, "project_src_single_package", False)) and (
+        src_layout_viol > 0
+    ):
+        gates_failed.append("project_src_single_package")
     # Runtime validation gates
     if bool(getattr(g, "runtime_validation_require_validate_call", False)) and (
         rv_missing > 0
@@ -2558,3 +2571,41 @@ def _ext_classes_require_super_init(cfg: QAConfig, artifacts_dir: Path) -> tuple
         encoding="utf-8",
     )
     return len(violations), report
+
+
+def _ext_project_src_single_package(cfg: QAConfig, artifacts_dir: Path) -> tuple[int, Path]:
+    """Enforce 'src' layout: under each configured 'src' root, there must be
+    exactly one immediate child directory (the top-level package).
+    Writes a JSON report listing roots and their child dirs.
+    """
+    src_name = str(getattr(cfg.gates, "project_src_dir_name", "src") or "src")
+    ignores = set(getattr(cfg.gates, "project_src_ignore_dirs", []) or [])
+    roots = []
+    violations = 0
+    for root in list(cfg.tool.paths or []):
+        try:
+            p = Path(root)
+            if p.name != src_name:
+                continue
+            if not p.exists() or not p.is_dir():
+                roots.append({"src": str(p), "exists": p.exists(), "children": []})
+                violations += 1
+                continue
+            child_dirs = []
+            for it in p.iterdir():
+                if it.is_dir() and (it.name not in ignores) and not it.name.startswith("."):
+                    child_dirs.append(it.name)
+            ok = len(child_dirs) == 1
+            if not ok:
+                violations += 1
+            roots.append({"src": str(p), "children": sorted(child_dirs), "ok": ok})
+        except Exception:
+            # treat error as violation
+            violations += 1
+            roots.append({"src": str(root), "error": True})
+    report = artifacts_dir / "src_layout.json"
+    report.write_text(
+        json.dumps({"roots": roots, "violations": violations}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return violations, report
