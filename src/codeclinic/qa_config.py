@@ -330,7 +330,7 @@ gates:
   packages_require_dunder_init: true
   modules_require_named_tests: true
   # __init__.py 必须定义非空 __all__（可配合 excludes）
-  exports_require_nonempty_all: false
+  exports_require_nonempty_all: true
   exports_nonempty_all_exclude: []
   # 可选：对某些模块跳过“命名测试文件存在性”检查（glob 模式列表）
   modules_named_tests_exclude: []
