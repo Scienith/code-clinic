@@ -232,7 +232,14 @@ class GatesSection:
     project_src_single_package: bool = False
     project_src_dir_name: str = "src"
     project_src_ignore_dirs: List[str] = field(
-        default_factory=lambda: ["__pycache__", ".venv", "venv", "migrations", "tests"]
+        default_factory=lambda: [
+            "__pycache__",
+            ".venv",
+            "venv",
+            "migrations",
+            "tests",
+            "*.egg-info",
+        ]
     )
 
 

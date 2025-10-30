@@ -2579,7 +2579,8 @@ def _ext_project_src_single_package(cfg: QAConfig, artifacts_dir: Path) -> tuple
     Writes a JSON report listing roots and their child dirs.
     """
     src_name = str(getattr(cfg.gates, "project_src_dir_name", "src") or "src")
-    ignores = set(getattr(cfg.gates, "project_src_ignore_dirs", []) or [])
+    import fnmatch as _fnm
+    ignores = list(getattr(cfg.gates, "project_src_ignore_dirs", []) or [])
     roots = []
     violations = 0
     for root in list(cfg.tool.paths or []):
@@ -2593,8 +2594,14 @@ def _ext_project_src_single_package(cfg: QAConfig, artifacts_dir: Path) -> tuple
                 continue
             child_dirs = []
             for it in p.iterdir():
-                if it.is_dir() and (it.name not in ignores) and not it.name.startswith("."):
-                    child_dirs.append(it.name)
+                if not it.is_dir():
+                    continue
+                name = it.name
+                if name.startswith('.'):
+                    continue
+                if any(_fnm.fnmatch(name, pat) for pat in ignores):
+                    continue
+                child_dirs.append(name)
             ok = len(child_dirs) == 1
             if not ok:
                 violations += 1
