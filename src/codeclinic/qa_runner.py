@@ -84,6 +84,18 @@ def qa_run(
         print(f"❌ 配置加载失败: {e}")
         return 2
 
+    # Optional pre-pass: autofix (Black + Ruff --fix) before checks
+    try:
+        if bool(getattr(cfg.tool, "autofix_on_run", False)):
+            print("🔧 先执行自动修复（Black + Ruff --fix）…")
+            try:
+                _ = qa_fix(config_path=config_path)
+            except Exception:
+                # best-effort, do not fail the run due to autofix
+                pass
+    except Exception:
+        pass
+
     out_dir = Path(output_override or cfg.tool.output)
     logs_dir = out_dir / "logs"
     artifacts_dir = out_dir / "artifacts"

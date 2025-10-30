@@ -15,6 +15,8 @@ tool:
   # 建议设置为相对路径；若与安装脚本配合并位于 <project>/codeclinic/ 下，
   #   使用 "results" 将产物写入 <project>/codeclinic/results/。
   output: "codeclinic/results"
+  # 在 QA 运行前先执行一次自动修复（Black + Ruff --fix 安全子集）
+  autofix_on_run: false
 
 tools:
   tests:

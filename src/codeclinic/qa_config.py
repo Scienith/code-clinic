@@ -24,6 +24,8 @@ class ToolSection:
         ]
     )
     output: str = "build/codeclinic"
+    # If true, run an autofix pass (Black + Ruff --fix safe subset) before QA run
+    autofix_on_run: bool = False
 
 
 @dataclass
@@ -373,6 +375,7 @@ def load_qa_config(path: str | Path) -> QAConfig:
     cfg.tool.include = tool.get("include", cfg.tool.include)
     cfg.tool.exclude = tool.get("exclude", cfg.tool.exclude)
     cfg.tool.output = tool.get("output", cfg.tool.output)
+    cfg.tool.autofix_on_run = bool(tool.get("autofix_on_run", cfg.tool.autofix_on_run))
 
     tools = data.get("tools") or {}
     fmt = tools.get("formatter") or {}
