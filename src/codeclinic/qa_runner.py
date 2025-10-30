@@ -807,6 +807,7 @@ def _run_internal_analyses(
             _prepare_stub_json_data,
             analyze_stub_completeness,
         )
+        from .tree_analysis import generate_tree_loc
 
         sdata = analyze_stub_completeness(project_data)
         # 写明细 JSON
@@ -825,6 +826,13 @@ def _run_internal_analyses(
             stub_dir,
             show_test_borders=cfg.visuals.show_test_status_borders,
         )
+        # Generate LOC tree visualization under artifacts/tree
+        try:
+            loc_svg = generate_tree_loc(project_data, artifacts_dir)
+            if loc_svg:
+                pass  # presence is enough; summary prints handled by caller if needed
+        except Exception:
+            pass
     except Exception as e:
         # do not fail the run due to reporting errors
         _ = e

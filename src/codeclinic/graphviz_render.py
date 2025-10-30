@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, Iterable, Set, Tuple
+from typing import Dict, Iterable, Set, Tuple, Optional
 
 from graphviz import Digraph
 from graphviz.backend import ExecutableNotFound
@@ -293,7 +293,7 @@ def render_stub_heatmap(
             "labelloc": "t",
         },
         node_attr={"shape": "box", "style": "rounded,filled", "fontname": "Helvetica"},
-        edge_attr={"arrowhead": "vee", "color": "#999999"},
+        edge_attr={"arrowhead": "none", "color": "#DDDDDD"},
     )
 
     # 添加节点，使用统一样式，边框可叠加测试通过/失败状态
@@ -360,14 +360,9 @@ def render_stub_heatmap(
             attrs["penwidth"] = "2"
         dot.node(name, **attrs)
 
-    # 添加边（较淡的颜色，不干扰热力图）
-    for src, dst in sorted(edges):
-        if src in nodes and dst in nodes:
-            dot.edge(src, dst, color="#CCCCCC", style="solid", penwidth="1")
-
-    # 添加包含关系边（虚线）
+    # 仅绘制包含关系边（虚线），不绘制导入关系
     for parent, child in sorted(child_edges):
-        if parent in nodes and child in nodes and (parent, child) not in edges:
+        if parent in nodes and child in nodes:
             dot.edge(parent, child, color="#DDDDDD", style="dashed", penwidth="1")
 
     dot_path = f"{output_base}.dot"
@@ -381,8 +376,6 @@ def render_stub_heatmap(
 
     return dot_path, svg_path
 
-
-from typing import Optional
 
 
 def _create_html_progress_bar(ratio: Optional[float], width: int = 120) -> str:
@@ -495,3 +488,161 @@ def _stub_ratio_to_color(ratio: float) -> str:
 
     # 转换为十六进制
     return f"#{red:02x}{green:02x}{blue:02x}"
+
+
+def _create_html_loc_bar(value: int, max_value: int, width: int = 120) -> str:
+    """Create a simple HTML bar representing value/max_value.
+
+    Uses the same HTML TABLE trick as stub heatmap to keep visual style consistent.
+
+    If max_value is 0, renders a light gray empty bar.
+    """
+    try:
+        mv = int(max_value)
+    except Exception:
+        mv = 0
+    try:
+        v = max(0, int(value))
+    except Exception:
+        v = 0
+
+    if mv <= 0:
+        return (
+            f"<TABLE BORDER=\"1\" CELLBORDER=\"0\" CELLSPACING=\"0\" STYLE=\"ROUNDED\">"
+            f"<TR><TD WIDTH=\"{width}\" HEIGHT=\"14\" BGCOLOR=\"lightgray\"></TD></TR>"
+            f"</TABLE>"
+        )
+
+    ratio = min(1.0, float(v) / float(mv))
+    filled_width = int(width * ratio)
+    empty_width = width - filled_width
+    if filled_width > 0 and empty_width > 0:
+        bar = (
+            f"<TABLE BORDER=\"1\" CELLBORDER=\"0\" CELLSPACING=\"0\" STYLE=\"ROUNDED\">"
+            f"<TR>"
+            f"<TD WIDTH=\"{filled_width}\" HEIGHT=\"14\" BGCOLOR=\"#4CAF50\"></TD>"
+            f"<TD WIDTH=\"{empty_width}\" HEIGHT=\"14\" BGCOLOR=\"lightgray\"></TD>"
+            f"</TR>"
+            f"</TABLE>"
+        )
+    elif filled_width <= 0:
+        bar = (
+            f"<TABLE BORDER=\"1\" CELLBORDER=\"0\" CELLSPACING=\"0\" STYLE=\"ROUNDED\">"
+            f"<TR><TD WIDTH=\"{width}\" HEIGHT=\"14\" BGCOLOR=\"lightgray\"></TD></TR>"
+            f"</TABLE>"
+        )
+    else:
+        bar = (
+            f"<TABLE BORDER=\"1\" CELLBORDER=\"0\" CELLSPACING=\"0\" STYLE=\"ROUNDED\">"
+            f"<TR><TD WIDTH=\"{width}\" HEIGHT=\"14\" BGCOLOR=\"#4CAF50\"></TD></TR>"
+            f"</TABLE>"
+        )
+    return bar
+
+
+def render_tree_loc(
+    nodes: Dict[str, NodeInfo],
+    child_edges: Set[Tuple[str, str]],
+    loc_map: Dict[str, int],
+    output_base: str,
+    fmt: str = "svg",
+) -> Tuple[str, str]:
+    """Render a pure containment tree with per-module LOC counts.
+
+    - Only draws parent->child containment edges (no import edges).
+    - Node styling follows the stub heatmap style (box, rounded, filled white, HTML label).
+    - For modules: displays "LOC: <n>". For packages: displays aggregated LOC of descendants.
+    - Includes a small green bar proportional to LOC relative to max LOC to aid scanning.
+    """
+    # Compute aggregated LOC for packages (sum of descendant modules)
+    # Build quick lookup of children
+    children_map: Dict[str, Set[str]] = {k: set() for k in nodes.keys()}
+    for parent, child in child_edges:
+        if parent in children_map:
+            children_map[parent].add(child)
+    # Cache for aggregation
+    agg_cache: Dict[str, int] = {}
+
+    def agg_loc(name: str) -> int:
+        if name in agg_cache:
+            return agg_cache[name]
+        n = nodes.get(name)
+        if not n:
+            agg_cache[name] = 0
+            return 0
+        if n.node_type == NodeType.MODULE:
+            val = int(loc_map.get(name, 0))
+            agg_cache[name] = val
+            return val
+        # package: sum all descendant modules
+        total = 0
+        stack = list(children_map.get(name, set()))
+        seen: Set[str] = set()
+        while stack:
+            cur = stack.pop()
+            if cur in seen:
+                continue
+            seen.add(cur)
+            cur_node = nodes.get(cur)
+            if cur_node:
+                if cur_node.node_type == NodeType.MODULE:
+                    total += int(loc_map.get(cur, 0))
+                else:
+                    # include __init__.py too if present (package node has file_path)
+                    # treat it as a module contribution
+                    total += int(loc_map.get(cur, 0))
+                    stack.extend(children_map.get(cur, set()))
+        agg_cache[name] = total
+        return total
+
+    # Determine max loc for bar scaling (consider modules only)
+    max_loc = 0
+    for name, node in nodes.items():
+        if node.node_type == NodeType.MODULE:
+            max_loc = max(max_loc, int(loc_map.get(name, 0)))
+
+    dot = Digraph(
+        "loc_tree",
+        graph_attr={"rankdir": "TB", "splines": "spline", "label": "Code LOC Tree", "labelloc": "t"},
+        node_attr={"shape": "box", "style": "rounded,filled", "fontname": "Helvetica"},
+        edge_attr={"arrowhead": "none"},
+    )
+
+    for name, node in nodes.items():
+        display_name = _get_short_name(name)
+        icon = "\U0001f4e6" if node.node_type == NodeType.PACKAGE else "\U0001f4c4"
+        if node.node_type == NodeType.MODULE:
+            loc = int(loc_map.get(name, 0))
+            bar = _create_html_loc_bar(loc, max_loc)
+            label = f"""<
+            <TABLE BORDER=\"0\" CELLBORDER=\"0\" CELLSPACING=\"0\">
+                <TR><TD>{icon} {display_name}</TD></TR>
+                <TR><TD>LOC: {loc}</TD></TR>
+                <TR><TD>{bar}</TD></TR>
+            </TABLE>
+            >"""
+        else:
+            total = agg_loc(name)
+            bar = _create_html_loc_bar(total, max_loc)
+            label = f"""<
+            <TABLE BORDER=\"0\" CELLBORDER=\"0\" CELLSPACING=\"0\">
+                <TR><TD>{icon} {display_name}</TD></TR>
+                <TR><TD>LOC(sum): {total}</TD></TR>
+                <TR><TD>{bar}</TD></TR>
+            </TABLE>
+            >"""
+        dot.node(name, label=label, fillcolor="#FFFFFF", shape="box", style="rounded,filled")
+
+    # Only draw containment edges
+    for parent, child in sorted(child_edges):
+        if parent in nodes and child in nodes:
+            dot.edge(parent, child, color="#DDDDDD", style="dashed", penwidth="1")
+
+    dot_path = f"{output_base}.dot"
+    svg_path = f"{output_base}.{fmt}"
+    dot.save(dot_path)
+    try:
+        dot.render(output_base, format=fmt, cleanup=True)
+    except ExecutableNotFound:
+        svg_path = ""
+    return dot_path, svg_path

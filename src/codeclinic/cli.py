@@ -210,6 +210,16 @@ def main() -> None:
     stub_data = analyze_stub_completeness(project_data)
     stub_json = save_stub_report(stub_data, project_data, output_dir)
 
+    # 7.3 LOC tree visualization (containment only)
+    try:
+        from codeclinic.tree_analysis import generate_tree_loc  # lazy import
+
+        loc_svg = generate_tree_loc(project_data, output_dir)
+        if loc_svg:
+            print(f"✓ 代码树（LOC）可视化保存到: {loc_svg}")
+    except Exception as e:
+        print(f"警告: 生成代码树可视化时出错: {e}")
+
     # 8. 总结报告
     _print_final_summary(violations_data, stub_data, output_dir)
 
@@ -421,6 +431,7 @@ def _print_final_summary(violations_data, stub_data, output_dir: Path) -> None:
     print(f"   📄 data.json - 完整项目数据")
     print(f"   📂 import_violations/ - 导入违规分析")
     print(f"   📂 stub_completeness/ - 实现完整度分析")
+    print(f"   📂 tree/ - 代码树(LOC) 可视化")
 
     print(f"\n🎉 所有结果保存在: {output_dir.absolute()}")
 
