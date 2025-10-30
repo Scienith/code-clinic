@@ -235,6 +235,10 @@ def qa_run(
         "report": str(pubse_report) if pubse_report else None,
         "status": "passed" if pubse_count == 0 else "failed",
     }
+    # New: __all__ symbols resolvable check
+    allsym_missing, allsym_report = _ext_exports_all_symbols_resolved(
+        cfg, artifacts_dir
+    )
     results["metrics"]["import_cycles"] = {
         "violations": cycles_count,
         "report": str(cycles_report) if cycles_report else None,
@@ -408,6 +412,10 @@ def qa_run(
         pass
     if bool(getattr(g, "packages_public_no_side_effects", False)) and pubse_count > 0:
         gates_failed.append("packages_public_no_side_effects")
+    if bool(getattr(g, "exports_all_symbols_resolved", False)) and (
+        allsym_missing > 0
+    ):
+        gates_failed.append("exports_all_symbols_resolved")
     if bool(getattr(g, "stubs_no_notimplemented_non_abc", False)) and notimpl_count > 0:
         gates_failed.append("stubs_no_notimplemented_non_abc")
     if (
@@ -2491,6 +2499,101 @@ def _ext_runtime_validate_call(cfg: QAConfig, artifacts_dir: Path) -> tuple[int,
         encoding="utf-8",
     )
     return len(missing), len(order_warn), report
+
+
+def _ext_exports_all_symbols_resolved(cfg: QAConfig, artifacts_dir: Path) -> tuple[int, Path]:
+    """Check that names listed in __all__ of package __init__.py are resolvable as
+    globals in that module (i.e., imported/defined at top level).
+    Only handles static __all__ defined as list/tuple of string constants.
+    """
+    paths = cfg.tool.paths
+    import fnmatch
+    excludes = list(getattr(cfg.gates, "exports_all_symbols_exclude", []) or [])
+    violations: list[dict[str, _Any]] = []
+    for root in paths:
+        base = Path(root)
+        if not base.exists():
+            continue
+        for dirpath, dirnames, filenames in os.walk(base):
+            if "__init__.py" not in filenames:
+                continue
+            initp = Path(dirpath) / "__init__.py"
+            # exclude
+            path_str = str(initp)
+            rel_str = path_str
+            try:
+                rel_str = str(initp.relative_to(Path.cwd()))
+            except Exception:
+                pass
+            if any(
+                fnmatch.fnmatch(path_str, pat) or fnmatch.fnmatch(rel_str, pat)
+                for pat in excludes
+            ):
+                continue
+            try:
+                src = initp.read_text(encoding="utf-8")
+                tree = _ast_ext.parse(src)
+            except Exception:
+                continue
+            # collect globals defined at top level
+            globals_defined: set[str] = set()
+            for n in getattr(tree, "body", []) or []:
+                if isinstance(n, (_ast_ext.FunctionDef, _ast_ext.AsyncFunctionDef, _ast_ext.ClassDef)):
+                    nm = getattr(n, "name", "")
+                    if nm:
+                        globals_defined.add(nm)
+                elif isinstance(n, _ast_ext.Assign):
+                    for t in getattr(n, "targets", []) or []:
+                        if isinstance(t, _ast_ext.Name):
+                            globals_defined.add(t.id)
+                elif isinstance(n, _ast_ext.Import):
+                    for a in getattr(n, "names", []) or []:
+                        asn = getattr(a, "asname", None)
+                        if asn:
+                            globals_defined.add(str(asn))
+                        else:
+                            # import pkg.sub -> binds 'pkg'
+                            nm = getattr(a, "name", "")
+                            if nm:
+                                globals_defined.add(nm.split(".")[0])
+                elif isinstance(n, _ast_ext.ImportFrom):
+                    for a in getattr(n, "names", []) or []:
+                        if getattr(a, "name", "") == "*":
+                            continue
+                        asn = getattr(a, "asname", None)
+                        globals_defined.add(str(asn) if asn else str(a.name))
+            # extract __all__ names (only static list/tuple of strings)
+            all_names: list[str] = []
+            for n in getattr(tree, "body", []) or []:
+                if isinstance(n, _ast_ext.Assign):
+                    for t in getattr(n, "targets", []) or []:
+                        if isinstance(t, _ast_ext.Name) and t.id == "__all__":
+                            v = getattr(n, "value", None)
+                            seq = None
+                            if isinstance(v, (_ast_ext.List, _ast_ext.Tuple)):
+                                seq = getattr(v, "elts", []) or []
+                            if seq is not None:
+                                for elt in seq:
+                                    if isinstance(elt, _ast_ext.Str):
+                                        all_names.append(str(elt.s))
+                            break
+            if not all_names:
+                continue
+            missing = [nm for nm in all_names if nm not in globals_defined]
+            if missing:
+                violations.append(
+                    {
+                        "package_init": str(initp),
+                        "missing_bindings": missing,
+                        "all": all_names,
+                    }
+                )
+    report = artifacts_dir / "exports_all_symbols_unresolved.json"
+    report.write_text(
+        json.dumps({"unresolved": violations}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return len(violations), report
 
 
 def _ext_classes_require_super_init(cfg: QAConfig, artifacts_dir: Path) -> tuple[int, Path]:

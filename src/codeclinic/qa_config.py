@@ -212,6 +212,9 @@ class GatesSection:
     # 是否将 Docstring 行计入函数行数统计
     fn_count_docstrings: bool = True
     exports_no_private: bool = True
+    # __all__ 符号必须可解析（__init__ 中列出的名称需在模块全局有真实绑定）
+    exports_all_symbols_resolved: bool = True
+    exports_all_symbols_exclude: List[str] = field(default_factory=list)
     # Runtime validation (pydantic.validate_call)
     runtime_validation_require_validate_call: bool = False
     runtime_validation_require_innermost: bool = False
@@ -843,6 +846,14 @@ def load_qa_config(path: str | Path) -> QAConfig:
         ex_all = g_exp.get("nonempty_all_exclude", None)
         if isinstance(ex_all, list):
             cfg.gates.exports_nonempty_all_exclude = [str(x) for x in ex_all]
+        # new: require __all__ symbols be resolvable
+        if "all_symbols_resolved" in g_exp:
+            cfg.gates.exports_all_symbols_resolved = bool(
+                g_exp.get("all_symbols_resolved")
+            )
+        ex_res = g_exp.get("all_symbols_exclude", None)
+        if isinstance(ex_res, list):
+            cfg.gates.exports_all_symbols_exclude = [str(x) for x in ex_res]
     except Exception:
         pass
 

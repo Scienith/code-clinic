@@ -141,6 +141,10 @@ gates:
       require_nonempty_all: true
       # 按 glob 排除不检查非空 __all__ 的路径
       nonempty_all_exclude: []
+      # __all__ 列名必须在模块全局有真实绑定（import/assign/def/class）
+      all_symbols_resolved: true
+      # 按 glob 排除不检查解析的路径
+      all_symbols_exclude: []
     # Public 出口无副作用（仅允许 re-export 与 __all__ 定义）
     public_no_side_effects: true
     # 顶层禁止的调用（可通配）
