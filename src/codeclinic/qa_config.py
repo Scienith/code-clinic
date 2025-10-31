@@ -206,6 +206,13 @@ class GatesSection:
     doc_required_sections: List[str] = field(
         default_factory=lambda: ["功能概述", "前置条件", "后置条件", "不变量", "副作用"]
     )
+    # 文档契约检测模式：rst_only | rst_or_keywords | keywords_only
+    doc_contracts_mode: str = "rst_or_keywords"
+    # reST 字段模式下必需字段
+    # 规范化键名：pre, post, inv, side-effects
+    doc_required_rst_fields: List[str] = field(
+        default_factory=lambda: ["pre", "post", "inv", "side-effects"]
+    )
     # 是否区分大小写
     doc_case_sensitive: bool = False
     fn_loc_max: int = 50
@@ -233,6 +240,11 @@ class GatesSection:
     classes_super_init_allow_comment_tags: List[str] = field(
         default_factory=lambda: ["codeclinic: allow-no-super-init"]
     )
+    # 禁止 typing.cast（可行内注释豁免）
+    forbid_cast: bool = True
+    cast_allow_comment_tags: List[str] = field(
+        default_factory=lambda: ["allow cast", "codeclinic: allow-cast"]
+    )
     # Project layout: enforce src layout (exactly one top-level package under src)
     project_src_single_package: bool = False
     project_src_dir_name: str = "src"
@@ -245,6 +257,20 @@ class GatesSection:
             "tests",
             "*.egg-info",
         ]
+    )
+    # Dead code analysis gates (disabled by default)
+    dead_code_enabled: bool = False
+    dead_code_max: int = 0
+    dead_code_include_annotations: bool = False
+    dead_code_allow_module_export_closure: bool = False
+    dead_code_whitelist: List[str] = field(default_factory=list)
+    dead_code_exclude_globs: List[str] = field(default_factory=list)
+    dead_code_protocol_nominal: bool = False
+    dead_code_protocol_strict_signature: bool = True
+    # 禁止 lambda 函数（可行内注释豁免）
+    forbid_lambda: bool = False
+    lambda_allow_comment_tags: List[str] = field(
+        default_factory=lambda: ["codeclinic: allow-lambda"]
     )
 
 
@@ -369,6 +395,17 @@ def load_qa_config(path: str | Path) -> QAConfig:
     if yaml is None:
         raise ImportError("需要安装PyYAML读取QA配置: pip install pyyaml")
     data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    # Optional strict validation via Pydantic schema
+    try:
+        from .qa_schema import validate_qa_yaml
+
+        validate_qa_yaml(data)
+    except ImportError:
+        # pydantic not installed – skip strict validation silently
+        pass
+    except Exception as e:
+        # Provide a clear message and re-raise to fail fast on invalid config
+        raise ValueError(f"codeclinic.yaml 配置校验失败: {e}") from e
     # Shallow merge with defaults
     tool = data.get("tool") or {}
     cfg.tool.paths = tool.get("paths", cfg.tool.paths)
@@ -489,6 +526,17 @@ def load_qa_config(path: str | Path) -> QAConfig:
             "allowed_external_depth", cfg.tools.deps.import_rules.allowed_external_depth
         )
         cfg.tools.deps.import_rules.allowed_external_depth = int(aed)
+    except Exception:
+        pass
+
+    # gates: simple top-level flags that don't belong to a nested section
+    try:
+        # forbid_cast + allow comment tags
+        if "forbid_cast" in gates:
+            cfg.gates.forbid_cast = bool(gates.get("forbid_cast"))
+        cat = gates.get("cast_allow_comment_tags")
+        if isinstance(cat, list):
+            cfg.gates.cast_allow_comment_tags = [str(x) for x in cat]
     except Exception:
         pass
     cfg.tools.deps.import_rules.aggregator_whitelist = list(
@@ -808,6 +856,50 @@ def load_qa_config(path: str | Path) -> QAConfig:
             cfg.gates.doc_required_sections = [str(x) for x in reqs]
         if "case_sensitive" in g_docs:
             cfg.gates.doc_case_sensitive = bool(g_docs.get("case_sensitive"))
+        # New: docs.mode (rst_only | rst_or_keywords | keywords_only)
+        mode = g_docs.get("mode")
+        if isinstance(mode, str) and mode.strip():
+            m = mode.strip()
+            if m in {"rst_only", "rst_or_keywords", "keywords_only"}:
+                cfg.gates.doc_contracts_mode = m
+        # New: docs.required_rst_fields
+        rrf = g_docs.get("required_rst_fields")
+        if isinstance(rrf, list):
+            cfg.gates.doc_required_rst_fields = [str(x) for x in rrf]
+    except Exception:
+        pass
+
+    # gates.dead_code
+    try:
+        g_dc = gates.get("dead_code", {}) if isinstance(gates.get("dead_code", {}), dict) else {}
+        if "enabled" in g_dc:
+            cfg.gates.dead_code_enabled = bool(g_dc.get("enabled"))
+        if "max" in g_dc:
+            cfg.gates.dead_code_max = int(g_dc.get("max"))
+        if "include_type_annotations" in g_dc:
+            cfg.gates.dead_code_include_annotations = bool(g_dc.get("include_type_annotations"))
+        if "allow_module_export_closure" in g_dc:
+            cfg.gates.dead_code_allow_module_export_closure = bool(g_dc.get("allow_module_export_closure"))
+        wl = g_dc.get("whitelist", None)
+        if isinstance(wl, list):
+            cfg.gates.dead_code_whitelist = [str(x) for x in wl]
+        ex = g_dc.get("exclude_globs", None)
+        if isinstance(ex, list):
+            cfg.gates.dead_code_exclude_globs = [str(x) for x in ex]
+        if "protocol_nominal" in g_dc:
+            cfg.gates.dead_code_protocol_nominal = bool(g_dc.get("protocol_nominal"))
+        if "protocol_strict_signature" in g_dc:
+            cfg.gates.dead_code_protocol_strict_signature = bool(g_dc.get("protocol_strict_signature"))
+    except Exception:
+        pass
+
+    # gates.forbid_lambda (top-level flags)
+    try:
+        if "forbid_lambda" in gates:
+            cfg.gates.forbid_lambda = bool(gates.get("forbid_lambda"))
+        lat = gates.get("lambda_allow_comment_tags")
+        if isinstance(lat, list):
+            cfg.gates.lambda_allow_comment_tags = [str(x) for x in lat]
     except Exception:
         pass
 

@@ -251,6 +251,11 @@ def qa_run(
     allsym_missing, allsym_report = _ext_exports_all_symbols_resolved(
         cfg, artifacts_dir
     )
+    results["metrics"]["exports_all_symbols_resolved"] = {
+        "missing": allsym_missing,
+        "report": str(allsym_report) if allsym_report else None,
+        "status": "passed" if allsym_missing == 0 else "failed",
+    }
     results["metrics"]["import_cycles"] = {
         "violations": cycles_count,
         "report": str(cycles_report) if cycles_report else None,
@@ -285,6 +290,27 @@ def qa_run(
         "violations": src_layout_viol,
         "report": str(src_layout_report) if src_layout_report else None,
         "status": "passed" if src_layout_viol == 0 else "failed",
+    }
+    # Dead code analysis (optional gate)
+    dc_count, dc_report = _ext_dead_code(cfg, artifacts_dir)
+    results["metrics"]["dead_code"] = {
+        "violations": dc_count,
+        "report": str(dc_report) if dc_report else None,
+        "status": "passed" if dc_count == 0 else "failed",
+    }
+    # Forbid typing.cast
+    cast_count, cast_report = _ext_forbid_cast(cfg, artifacts_dir)
+    results["metrics"]["typing_cast"] = {
+        "violations": cast_count,
+        "report": str(cast_report) if cast_report else None,
+        "status": "passed" if cast_count == 0 else "failed",
+    }
+    # Forbid lambda usage
+    lam_count, lam_report = _ext_forbid_lambda(cfg, artifacts_dir)
+    results["metrics"]["forbid_lambda"] = {
+        "violations": lam_count,
+        "report": str(lam_report) if lam_report else None,
+        "status": "passed" if lam_count == 0 else "failed",
     }
 
     # Gates evaluation
@@ -430,6 +456,8 @@ def qa_run(
         gates_failed.append("exports_all_symbols_resolved")
     if bool(getattr(g, "stubs_no_notimplemented_non_abc", False)) and notimpl_count > 0:
         gates_failed.append("stubs_no_notimplemented_non_abc")
+    if bool(getattr(g, "forbid_lambda", False)) and lam_count > 0:
+        gates_failed.append("forbid_lambda")
     if (
         bool(getattr(g, "tests_red_failures_are_assertions", False))
         and (junit_errors or 0) > 0
@@ -443,6 +471,17 @@ def qa_run(
         src_layout_viol > 0
     ):
         gates_failed.append("project_src_single_package")
+    # Dead code gate
+    try:
+        if bool(getattr(g, "dead_code_enabled", False)):
+            thr = int(getattr(g, "dead_code_max", 0) or 0)
+            if dc_count > thr:
+                gates_failed.append("dead_code")
+    except Exception:
+        pass
+    # Forbid typing.cast gate
+    if bool(getattr(g, "forbid_cast", False)) and cast_count > 0:
+        gates_failed.append("forbid_cast")
     # Runtime validation gates
     if bool(getattr(g, "runtime_validation_require_validate_call", False)) and (
         rv_missing > 0
@@ -456,8 +495,80 @@ def qa_run(
     results["gates_failed"] = gates_failed
     results["status"] = "passed" if not gates_failed else "failed"
 
-    # Write summary.json
+    # Build minimal gates summary
+    def _detail_from_metrics(key_chain: list[str]) -> str | None:
+        cur: dict | str | None = results  # type: ignore
+        try:
+            for k in key_chain:
+                if isinstance(cur, dict):
+                    cur = cur.get(k)  # type: ignore
+                else:
+                    return None
+            if isinstance(cur, str):
+                return cur
+            return None
+        except Exception:
+            return None
+
+    logs_map = results.get("logs", {}) if isinstance(results.get("logs"), dict) else {}
+
+    gate_specs = [
+        ("formatter_clean", bool(getattr(g, "formatter_clean", True)), logs_map.get("black")),
+        ("linter_errors_max", True, logs_map.get("ruff")),
+        ("mypy_errors_max", True, logs_map.get("mypy")),
+        ("coverage_min", True, _detail_from_metrics(["metrics", "tests", "coverage_xml"]) or logs_map.get("pytest")),
+        ("import_violations_max", True, _detail_from_metrics(["metrics", "deps", "report"])),
+        ("max_file_loc", True, _detail_from_metrics(["metrics", "complexity", "report"])),
+        ("cc_max_rank_max", True, _detail_from_metrics(["metrics", "complexity", "report"])),
+        ("mi_min", True, _detail_from_metrics(["metrics", "complexity", "report"])),
+        ("components_dep_stub_free_requires_green", bool(getattr(g, "components_dep_stub_free_requires_green", False)), _detail_from_metrics(["metrics", "component_tests", "report"])),
+        ("packages_require_dunder_init", bool(getattr(g, "packages_require_dunder_init", False)), None),
+        ("modules_require_named_tests", bool(getattr(g, "modules_require_named_tests", False)), _detail_from_metrics(["metrics", "tests_presence", "report"])),
+        ("doc_contracts_missing_max", True, _detail_from_metrics(["metrics", "doc_contracts_ext", "report"])),
+        ("function_metrics_over_threshold", True, _detail_from_metrics(["metrics", "function_metrics_ext", "report"])),
+        ("exports_no_private", bool(getattr(g, "exports_no_private", False)), _detail_from_metrics(["metrics", "exports_ext", "report"])),
+        ("exports_require_nonempty_all", bool(getattr(g, "exports_require_nonempty_all", False)), _detail_from_metrics(["metrics", "exports_ext", "report_all"])),
+        ("imports_forbid_private_symbols", bool(getattr(g, "imports_forbid_private_symbols", False)), _detail_from_metrics(["metrics", "imports_private_symbols", "report"])),
+        ("failfast", any([getattr(g, "failfast_forbid_dict_get_default", False), getattr(g, "failfast_forbid_getattr_default", False), getattr(g, "failfast_forbid_env_default", False), getattr(g, "failfast_forbid_import_fallback", False), getattr(g, "failfast_forbid_attr_fallback", False), getattr(g, "failfast_forbid_key_fallback", False)]), _detail_from_metrics(["metrics", "failfast", "report"])),
+        ("imports_cycles_max", True, _detail_from_metrics(["metrics", "import_cycles", "report"])),
+        ("packages_public_no_side_effects", bool(getattr(g, "packages_public_no_side_effects", False)), _detail_from_metrics(["metrics", "public_exports", "report"])),
+        ("exports_all_symbols_resolved", bool(getattr(g, "exports_all_symbols_resolved", True)), _detail_from_metrics(["metrics", "exports_all_symbols_resolved", "report"])),
+        ("stubs_no_notimplemented_non_abc", bool(getattr(g, "stubs_no_notimplemented_non_abc", False)), _detail_from_metrics(["metrics", "stubs_notimplemented", "report"])),
+        ("tests_red_failures_are_assertions", bool(getattr(g, "tests_red_failures_are_assertions", False)), None),
+        ("classes_require_super_init", bool(getattr(g, "classes_require_super_init", False)), _detail_from_metrics(["metrics", "classes_super_init", "report"])),
+        ("project_src_single_package", bool(getattr(g, "project_src_single_package", False)), _detail_from_metrics(["metrics", "project_src_layout", "report"])),
+        ("runtime_validation_require_validate_call", bool(getattr(g, "runtime_validation_require_validate_call", False)), _detail_from_metrics(["metrics", "runtime_validation", "report"])),
+        ("runtime_validation_require_innermost", bool(getattr(g, "runtime_validation_require_innermost", False)), _detail_from_metrics(["metrics", "runtime_validation", "report"])),
+        ("forbid_cast", bool(getattr(g, "forbid_cast", False)), _detail_from_metrics(["metrics", "typing_cast", "report"])),
+        ("forbid_lambda", bool(getattr(g, "forbid_lambda", False)), _detail_from_metrics(["metrics", "forbid_lambda", "report"])),
+        ("dead_code", bool(getattr(g, "dead_code_enabled", False)), _detail_from_metrics(["metrics", "dead_code", "report"])),
+    ]
+
+    gates_list = []
+    failed_set = set(gates_failed)
+    for name, enabled, detail in gate_specs:
+        passed = (name not in failed_set) if enabled else True
+        gates_list.append({
+            "name": name,
+            "enabled": bool(enabled),
+            "passed": bool(passed),
+            "detail": detail,
+        })
+
+    failed_gates_only = [g for g in gates_list if g.get("enabled") and not g.get("passed")]
+    minimal = {
+        "version": "1.0",
+        "status": "passed" if not gates_failed else "failed",
+        "artifacts_base": str(out_dir),
+        "gates": failed_gates_only,
+    }
+
+    # Write minimal summary
     (out_dir / "summary.json").write_text(
+        json.dumps(minimal, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    # Keep full results for debugging/integration consumers
+    (out_dir / "summary_full.json").write_text(
         json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     # Write simple HTML report
@@ -1532,6 +1643,68 @@ def _ext_collect_files(cfg: QAConfig) -> list[str]:
     return _collect_py_files(cfg.tool.paths, cfg.tool.include, cfg.tool.exclude)
 
 
+def _ext_dead_code(cfg: QAConfig, artifacts_dir: Path) -> tuple[int, Optional[Path]]:
+    try:
+        from .dead_code import save_dead_code_report
+    except Exception:
+        return 0, None
+    # Build exclude list combining QA tool.exclude and dead_code_exclude_globs
+    exclude = list(cfg.tool.exclude or [])
+    try:
+        for g in getattr(cfg.gates, "dead_code_exclude_globs", []) or []:
+            if g not in exclude:
+                exclude.append(g)
+    except Exception:
+        pass
+    out_dir = artifacts_dir / "dead_code"
+    count, report = save_dead_code_report(
+        paths=cfg.tool.paths,
+        include=cfg.tool.include,
+        exclude=exclude,
+        output_dir=out_dir,
+        allow_module_export_closure=bool(
+            getattr(cfg.gates, "dead_code_allow_module_export_closure", False)
+        ),
+        include_annotations=bool(
+            getattr(cfg.gates, "dead_code_include_annotations", False)
+        ),
+        whitelist_roots=list(getattr(cfg.gates, "dead_code_whitelist", []) or []),
+        # Always enable nominal Protocol propagation with strict signature matching
+        protocol_nominal=True,
+        protocol_strict_signature=True,
+    )
+    return count, report
+
+
+def _ext_forbid_lambda(cfg: QAConfig, artifacts_dir: Path) -> tuple[int, Path]:
+    files = _ext_collect_files(cfg)
+    tags = list(getattr(cfg.gates, "lambda_allow_comment_tags", []) or [])
+    violations: list[dict[str, _Any]] = []
+    for f in files:
+        try:
+            src = Path(f).read_text(encoding="utf-8")
+            tree = _ast_ext.parse(src)
+        except Exception:
+            continue
+        lines = src.splitlines()
+        for node in [n for n in _ast_ext.walk(tree) if isinstance(n, _ast_ext.Lambda)]:
+            ln = getattr(node, "lineno", 0) or 0
+            # inline allow tag
+            try:
+                line = lines[max(0, ln - 1)].lower()
+                if any(t.lower() in line for t in tags):
+                    continue
+            except Exception:
+                pass
+            violations.append({"file": f, "lineno": ln})
+    report = artifacts_dir / "forbid_lambda.json"
+    report.write_text(
+        json.dumps({"violations": violations}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return len(violations), report
+
+
 def _ext_is_public(name: str) -> bool:
     return not name.startswith("_") and name != "__init__"
 
@@ -1690,6 +1863,98 @@ def _ext_private_symbol_imports(cfg: QAConfig, artifacts_dir: Path) -> tuple[int
                         }
                     )
     report = artifacts_dir / "private_symbol_imports.json"
+    report.write_text(
+        json.dumps({"violations": violations}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return len(violations), report
+
+
+def _ext_forbid_cast(cfg: QAConfig, artifacts_dir: Path) -> tuple[int, Path]:
+    """Forbid typing.cast usage with inline comment exemptions.
+
+    Recognizes:
+      - import typing as t; t.cast(...)
+      - from typing import cast as c; c(...)
+      - typing.cast(...), cast(...)
+      - typing_extensions.cast and aliases
+
+    Allow exemptions via line comments containing any tag in
+    cfg.gates.cast_allow_comment_tags.
+    """
+    files = _ext_collect_files(cfg)
+    tags = list(getattr(cfg.gates, "cast_allow_comment_tags", []) or [])
+    violations: list[dict[str, _Any]] = []
+    for f in files:
+        try:
+            src = Path(f).read_text(encoding="utf-8")
+            tree = _ast_ext.parse(src)
+        except Exception:
+            continue
+        typing_aliases: set[str] = {"typing"}
+        typingext_aliases: set[str] = {"typing_extensions"}
+        cast_aliases: set[str] = set()
+
+        for node in [
+            n
+            for n in _ast_ext.iter_child_nodes(tree)
+            if isinstance(n, (_ast_ext.Import, _ast_ext.ImportFrom))
+        ]:
+            if isinstance(node, _ast_ext.Import):
+                for alias in getattr(node, "names", []) or []:
+                    mod = getattr(alias, "name", "") or ""
+                    asname = getattr(alias, "asname", None) or None
+                    if mod == "typing":
+                        if asname:
+                            typing_aliases.add(asname)
+                        else:
+                            typing_aliases.add("typing")
+                    if mod == "typing_extensions":
+                        if asname:
+                            typingext_aliases.add(asname)
+                        else:
+                            typingext_aliases.add("typing_extensions")
+            elif isinstance(node, _ast_ext.ImportFrom):
+                mod = getattr(node, "module", "") or ""
+                if mod in ("typing", "typing_extensions"):
+                    for alias in getattr(node, "names", []) or []:
+                        nm = getattr(alias, "name", "") or ""
+                        asname = getattr(alias, "asname", None) or None
+                        if nm == "cast":
+                            cast_aliases.add(asname or nm)
+
+        # Walk calls
+        for n in [n for n in _ast_ext.walk(tree) if isinstance(n, _ast_ext.Call)]:
+            try:
+                func = n.func
+                is_cast = False
+                if isinstance(func, _ast_ext.Name):
+                    if func.id in cast_aliases:
+                        is_cast = True
+                    # If imported bare `cast` via `from typing import cast` but aliased later
+                    if func.id == "cast" and "cast" in cast_aliases:
+                        is_cast = True
+                elif isinstance(func, _ast_ext.Attribute):
+                    # <alias>.cast(...)
+                    if func.attr == "cast":
+                        base = getattr(func, "value", None)
+                        if isinstance(base, _ast_ext.Name) and (
+                            base.id in typing_aliases or base.id in typingext_aliases
+                        ):
+                            is_cast = True
+                if is_cast:
+                    ln = getattr(n, "lineno", 0) or 0
+                    if not _line_has_allow_comment(src, ln, tags):
+                        violations.append(
+                            {
+                                "file": f,
+                                "lineno": ln,
+                            }
+                        )
+            except Exception:
+                continue
+
+    report = artifacts_dir / "forbid_cast.json"
     report.write_text(
         json.dumps({"violations": violations}, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -2245,51 +2510,126 @@ def _ext_junit_failure_types(
         return 0, 0
 
 
+def _parse_rst_contracts(doc: str) -> dict:
+    """Parse reST field list for contract fields.
+
+    Supports repeated fields and multi-line indented continuations.
+    Normalized keys: pre, post, inv, side-effects
+    """
+    lines = (doc or "").splitlines()
+    fields: dict[str, list[str]] = {"pre": [], "post": [], "inv": [], "side-effects": []}
+    # synonyms map
+    syn = {
+        "pre": "pre",
+        "precondition": "pre",
+        "post": "post",
+        "postcondition": "post",
+        "inv": "inv",
+        "invariant": "inv",
+        "side-effects": "side-effects",
+        "side_effects": "side-effects",
+    }
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.lstrip().startswith(":") and ":" in line:
+            # pattern :name: value
+            try:
+                s = line.lstrip()[1:]
+                name, rest = s.split(":", 1)
+                key = syn.get(name.strip().lower(), None)
+                if key in fields:
+                    val = rest.strip()
+                    # collect following indented lines as continuation
+                    j = i + 1
+                    cont: list[str] = []
+                    while j < len(lines):
+                        nxt = lines[j]
+                        if nxt.startswith(" ") or nxt.startswith("\t"):
+                            cont.append(nxt.strip())
+                            j += 1
+                        else:
+                            break
+                    if cont:
+                        if val:
+                            cont.insert(0, val)
+                        val = "\n".join(cont).strip()
+                    fields[key].append(val)
+                    i = j
+                    continue
+            except Exception:
+                pass
+        i += 1
+    return fields
+
+
 def _ext_doc_contracts(cfg: QAConfig, artifacts_dir: Path) -> tuple[int, Path]:
     files = _ext_collect_files(cfg)
-    missing: list[dict[str, _Any]] = []
-    required = list(getattr(cfg.gates, "doc_required_sections", []) or [])
-    if not required:
-        required = ["功能概述", "前置条件", "后置条件", "不变量", "副作用"]
+    mode = str(getattr(cfg.gates, "doc_contracts_mode", "rst_or_keywords") or "rst_or_keywords")
+    req_sections = list(getattr(cfg.gates, "doc_required_sections", []) or [])
+    if not req_sections:
+        req_sections = ["功能概述", "前置条件", "后置条件", "不变量", "副作用"]
     case_sensitive = bool(getattr(cfg.gates, "doc_case_sensitive", False))
+
+    rst_required = list(getattr(cfg.gates, "doc_required_rst_fields", []) or ["pre", "post", "inv", "side-effects"])
+
+    results: list[dict[str, _Any]] = []
+    total_missing = 0
+
     for f in files:
         try:
             src = Path(f).read_text(encoding="utf-8")
             tree = _ast_ext.parse(src)
         except Exception:
             continue
-        file_missing: list[dict[str, _Any]] = []
+        file_items: list[dict[str, _Any]] = []
         for node in [
             n
             for n in _ast_ext.walk(tree)
             if isinstance(n, (_ast_ext.FunctionDef, _ast_ext.AsyncFunctionDef))
         ]:
-            # 检查所有函数（不区分是否 @stub 或公开）
             doc = _ast_ext.get_docstring(node) or ""
+            fn_item: dict[str, _Any] = {"name": node.name, "lineno": getattr(node, "lineno", 0) or 0}
+            missing_reasons: list[str] = []
             if not doc.strip():
-                file_missing.append(
-                    {"name": node.name, "lineno": node.lineno, "reason": "no_doc"}
-                )
-            else:
+                missing_reasons.append("no_doc")
+                total_missing += 1
+                fn_item["missing"] = missing_reasons
+                file_items.append(fn_item)
+                continue
+
+            used_rst = False
+            parsed = _parse_rst_contracts(doc)
+            if mode in ("rst_only", "rst_or_keywords"):
+                # check rst fields
+                present = {k: (len(parsed.get(k, []) or []) > 0) for k in rst_required}
+                missing_keys = [k for k, ok in present.items() if not ok]
+                if missing_keys:
+                    missing_reasons.append("missing_rst_fields:" + ",".join(missing_keys))
+                else:
+                    used_rst = True
+                # Always attach parsed for report
+                fn_item["contracts_rst"] = {k: parsed.get(k, []) for k in ["pre", "post", "inv", "side-effects"]}
+
+            if (mode == "keywords_only") or (mode == "rst_or_keywords" and not used_rst):
                 txt = doc if case_sensitive else doc.lower()
-                keys = required if case_sensitive else [k.lower() for k in required]
+                keys = req_sections if case_sensitive else [k.lower() for k in req_sections]
                 if not all(k in txt for k in keys):
-                    file_missing.append(
-                        {
-                            "name": node.name,
-                            "lineno": node.lineno,
-                            "reason": "missing_sections",
-                            "required": required,
-                        }
-                    )
-        if file_missing:
-            missing.append({"file": f, "missing": file_missing})
+                    missing_reasons.append("missing_keywords")
+
+            if missing_reasons:
+                fn_item["missing"] = missing_reasons
+                file_items.append(fn_item)
+                total_missing += 1
+
+        if file_items:
+            results.append({"file": f, "missing": file_items})
+
     report = artifacts_dir / "doc_contracts.json"
     report.write_text(
-        json.dumps({"stub_missing": missing}, ensure_ascii=False, indent=2),
+        json.dumps({"stub_missing": results}, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    total_missing = sum(len(item.get("missing", [])) for item in missing)
     return total_missing, report
 
 

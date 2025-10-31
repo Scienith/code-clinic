@@ -124,11 +124,15 @@ gates:
   # 文档契约（如 stub 的 doc）缺失上限
   docs:
     contracts_missing_max: 0
+    # 验证模式：rst_only（仅 reST 字段）| rst_or_keywords（优先 reST，缺失回退关键词）| keywords_only（仅关键词）
+    mode: rst_or_keywords
     # 要求 docstring 包含的关键段落（按包含关系匹配；默认大小写不敏感）
     required_sections: ["功能概述", "前置条件", "后置条件", "不变量", "副作用"]
     # 是否区分大小写（默认 false）
     # case_sensitive: false
     # 检测范围：全部函数（无需配置）
+    # reST 字段模式下的必需字段（规范化键名）：pre, post, inv, side-effects
+    required_rst_fields: [pre, post, inv, side-effects]
 
   # 包/导出规则
   packages:
@@ -151,6 +155,15 @@ gates:
     public_no_side_effects: true
     # 顶层禁止的调用（可通配）
     public_side_effect_forbidden_calls: ["open", "subprocess.*", "os.system", "pathlib.Path.write_text", "pathlib.Path.write_bytes", "requests.*"]
+
+  # 死代码扫描（默认关闭，仅在开启后作为门禁）
+  dead_code:
+    enabled: false
+    max: 0  # 允许的死代码符号个数
+    include_type_annotations: false  # 类型注解是否计为“使用”
+    allow_module_export_closure: false  # 允许导出模块触发“顶层闭包保留”
+    whitelist: []  # 额外的根 FQN 名称列表
+    exclude_globs: ["**/tests/**", "**/migrations/**"]
 
   # 模块命名测试存在性
   tests_presence:

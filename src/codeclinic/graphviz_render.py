@@ -144,7 +144,8 @@ def render_violations_graph(
         icon = (
             "\U0001f4e6" if node.node_type == NodeType.PACKAGE else "\U0001f4c4"
         )  # 📦 or 📄
-        label = f"{icon} {display_name}\n{node.node_type.value}"
+        # Remove explicit package/module marker from node label
+        label = f"{icon} {display_name}"
         dot.node(
             name, label=label, fillcolor="#FFFFFF", shape="box", style="rounded,filled"
         )
@@ -203,8 +204,8 @@ def render_violations_tree_graph(
     for name, node in nodes.items():
         display_name = _get_short_name(name)
         icon = "\U0001f4e6" if node.node_type == NodeType.PACKAGE else "\U0001f4c4"
-        kind = "package" if node.node_type == NodeType.PACKAGE else "module"
-        label = f"{icon} {display_name}\n{kind}"
+        # Remove explicit package/module marker from node label
+        label = f"{icon} {display_name}"
         dot.node(
             name, label=label, fillcolor="#FFFFFF", shape="box", style="rounded,filled"
         )
