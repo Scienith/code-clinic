@@ -904,26 +904,17 @@ def analyze_dead_code(
 
     # Nominal protocol propagation: Port.m -> Impl.m (only if impl class is used)
     if protocol_nominal:
-        # collect protocol class fqns
-        prot_set: Set[str] = set()
-        # map impl -> list of ports it inherits
+        # Collect protocol classes via 'inherit -> typing.Protocol'
+        prot_set: Set[str] = set(
+            e.src for e in edges if e.type == "inherit" and isinstance(e.dst, str) and (
+                e.dst == "typing.Protocol" or str(e.dst).endswith(".Protocol")
+            )
+        )
+        # Map impl -> set(ports) using inherit edges
         impl_to_ports: Dict[str, Set[str]] = {}
-        for mod_name, mi in modules.items():
-            for cls_local, bases in (mi.bases or {}).items():
-                cls_fqn = f"{mod_name}.{cls_local}" if mod_name else cls_local
-                is_protocol = any(
-                    b in {"typing.Protocol", "typing_extensions.Protocol"} or b.endswith(".Protocol")
-                    for b in bases
-                )
-                if is_protocol:
-                    prot_set.add(cls_fqn)
-        # map ports to impls (direct nominal)
-        for mod_name, mi in modules.items():
-            for cls_local, bases in (mi.bases or {}).items():
-                cls_fqn = f"{mod_name}.{cls_local}" if mod_name else cls_local
-                for b in bases:
-                    if b in prot_set:
-                        impl_to_ports.setdefault(cls_fqn, set()).add(b)
+        for e in edges:
+            if e.type == "inherit" and isinstance(e.dst, str) and e.dst in prot_set:
+                impl_to_ports.setdefault(e.src, set()).add(e.dst)
         # build method name map for ports
         port_methods: Dict[str, Set[str]] = {}
         for sym in syms.values():
