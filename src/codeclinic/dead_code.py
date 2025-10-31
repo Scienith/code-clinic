@@ -359,6 +359,25 @@ class _SymVisitor(ast.NodeVisitor):
         self.func_stack.append(fqn)
         # push local alias scope
         self.alias_stack.append({})
+        # push local var types scope (initialize from parameter annotations)
+        vtypes: Dict[str, str] = {}
+        try:
+            args = getattr(node, "args", None)
+            if args is not None:
+                params = list(getattr(args, "args", []) or [])
+                start = 1 if kind == "method" and params else 0
+                for a in params[start:]:
+                    ann = getattr(a, "annotation", None)
+                    if ann is not None:
+                        tname = self._name_of_expr(ann)
+                        if tname:
+                            tfqn = self._resolve_any(tname) or tname
+                            pname = getattr(a, "arg", "")
+                            if pname:
+                                vtypes[pname] = str(tfqn)
+        except Exception:
+            pass
+        self.var_types_stack.append(vtypes)
         # track inner defs in this function for return-escape
         self.inner_defs_in_cur_func = set()
         for st in getattr(node, "body", []) or []:
@@ -386,6 +405,8 @@ class _SymVisitor(ast.NodeVisitor):
             pass
         # pop local alias scope
         _ = self.alias_stack.pop() if self.alias_stack else None
+        # pop local var types scope
+        _ = self.var_types_stack.pop() if self.var_types_stack else None
         # If this is __init__ of a class, infer simple `self.<attr> = <param>` types from annotations
         try:
             if kind == "method" and name == "__init__" and self.class_stack:
@@ -518,10 +539,29 @@ class _SymVisitor(ast.NodeVisitor):
                     # Fallback: if callee is a class defined in current module, treat as constructor
                     if not target_type and isinstance(callee_fqn, str) and callee_fqn in self.defs and self.defs[callee_fqn].kind == "class":
                         target_type = callee_fqn
-                    if target_type and self.alias_stack:
+                    if target_type and self.var_types_stack:
                         for t in getattr(node, "targets", []) or []:
                             if isinstance(t, ast.Name):
-                                self.alias_stack[-1][t.id] = str(target_type)
+                                self.var_types_stack[-1][t.id] = str(target_type)
+        except Exception:
+            pass
+        # Class attribute type: self.<field> = Name -> learn from var_types
+        try:
+            if self.class_stack and any(isinstance(t, ast.Attribute) and isinstance(getattr(t, "value", None), ast.Name) and getattr(t.value, "id", None) == "self" for t in getattr(node, "targets", []) or []):
+                cls_fqn = self.class_stack[-1]
+                field_names = [getattr(t, "attr", "") for t in getattr(node, "targets", []) if isinstance(t, ast.Attribute)]
+                val = getattr(node, "value", None)
+                tfqn: Optional[str] = None
+                if isinstance(val, ast.Name) and self.var_types_stack:
+                    tfqn = (self.var_types_stack[-1] or {}).get(getattr(val, "id", ""))
+                elif isinstance(val, ast.Call):
+                    callee = self._name_of_expr(getattr(val, "func", None))
+                    if callee:
+                        tfqn = str(self._resolve_any(callee) or callee)
+                if tfqn:
+                    for fn in field_names:
+                        if fn:
+                            self.attr_types_by_class.setdefault(cls_fqn, {})[fn] = tfqn
         except Exception:
             pass
         self.generic_visit(node)
