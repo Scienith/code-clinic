@@ -598,6 +598,17 @@ class _SymVisitor(ast.NodeVisitor):
                 tfqn = (self.attr_types_by_class.get(cls_fqn) or {}).get(field)
                 if tfqn and mname:
                     self._add_edge(f"{tfqn}.{mname}", "call", node)
+            # Fallback for var.method(...) where var has inferred type
+            if (
+                isinstance(fn, ast.Attribute)
+                and isinstance(getattr(fn, "value", None), ast.Name)
+                and self.var_types_stack
+            ):
+                vname = getattr(fn.value, "id", "")
+                mname = getattr(fn, "attr", "")
+                tfqn = (self.var_types_stack[-1] or {}).get(vname)
+                if tfqn and mname:
+                    self._add_edge(f"{tfqn}.{mname}", "call", node)
         except Exception:
             pass
         # record callable uses recursively (call + refs in args/keywords/containers)
@@ -670,6 +681,17 @@ class _SymVisitor(ast.NodeVisitor):
                         field = getattr(fn.value, "attr", "")
                         mname = getattr(fn, "attr", "")
                         tfqn = (self.attr_types_by_class.get(cls_fqn) or {}).get(field)
+                        if tfqn and mname:
+                            self._add_edge(f"{tfqn}.{mname}", "call", expr)
+                    # Fallback for var.method(...) where var has inferred type
+                    if (
+                        isinstance(fn, ast.Attribute)
+                        and isinstance(getattr(fn, "value", None), ast.Name)
+                        and self.var_types_stack
+                    ):
+                        vname = getattr(fn.value, "id", "")
+                        mname = getattr(fn, "attr", "")
+                        tfqn = (self.var_types_stack[-1] or {}).get(vname)
                         if tfqn and mname:
                             self._add_edge(f"{tfqn}.{mname}", "call", expr)
                     # Fallback for chained call: m1(...).m2() using return types of m1
