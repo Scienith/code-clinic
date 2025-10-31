@@ -786,10 +786,16 @@ def _run_mypy(cfg: QAConfig, logs_dir: Path) -> Tuple[str, str, Optional[int]]:
                     "disallow_any_expr = True",
                     "disallow_any_generics = True",
                     "disallow_any_decorated = True",
-                    "disallow_any_unimported = True",
                     "disallow_subclassing_any = True",
                     "disallow_any_explicit = True",
                 ]
+                # Respect optional gates.typecheck.disallow_any_unimported (default True)
+                try:
+                    dau = getattr(cfg.gates, "typecheck_disallow_any_unimported", True)
+                except Exception:
+                    dau = True
+                if bool(dau):
+                    lines += ["disallow_any_unimported = True"]
         except Exception:
             pass
         # Exempt decorated functions for specific third-party decorators by disabling disallow_any_decorated per module
