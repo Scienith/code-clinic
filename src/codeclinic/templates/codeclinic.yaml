@@ -79,6 +79,8 @@ gates:
   typecheck:
     # 严格模式（建议 true）
     strict: true
+    # 禁止 Any（mypy disallow-any 家族；开启后 Any 用法将导致类型检查错误）
+    disallow_any: false
     # 跳过对第三方库类型缺失的校验（mypy 按模块/包忽略 missing imports）
     # 示例：根据项目实际三方依赖按需调整
     ignore_missing_imports: [

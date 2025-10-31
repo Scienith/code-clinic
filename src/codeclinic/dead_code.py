@@ -834,8 +834,12 @@ class _SymVisitor(ast.NodeVisitor):
             elif hasattr(ast, "BinOp") and isinstance(ann, ast.BinOp) and isinstance(getattr(ann, "op", None), ast.BitOr):
                 out.extend(self._type_names_from_annotation(getattr(ann, "left", None)))
                 out.extend(self._type_names_from_annotation(getattr(ann, "right", None)))
-            elif isinstance(ann, ast.Constant) and ann.value is None:
-                out.append("None")
+            elif isinstance(ann, ast.Constant):
+                if ann.value is None:
+                    out.append("None")
+                elif isinstance(ann.value, str) and ann.value.strip():
+                    # Forward-referenced annotation like "ExecContext"
+                    out.append(str(ann.value).strip())
         except Exception:
             pass
         return out

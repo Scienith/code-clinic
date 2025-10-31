@@ -272,6 +272,8 @@ class GatesSection:
     lambda_allow_comment_tags: List[str] = field(
         default_factory=lambda: ["codeclinic: allow-lambda"]
     )
+    # Typecheck: forbid Any usages via mypy disallow-any family
+    typecheck_disallow_any: bool = False
 
 
 @dataclass
@@ -688,6 +690,9 @@ def load_qa_config(path: str | Path) -> QAConfig:
         # typecheck.errors_max -> mypy_errors_max
         if "errors_max" in g_tc:
             cfg.gates.mypy_errors_max = int(g_tc.get("errors_max"))
+        # typecheck.disallow_any -> enable mypy disallow-any flags
+        if "disallow_any" in g_tc:
+            cfg.gates.typecheck_disallow_any = bool(g_tc.get("disallow_any"))
     except Exception:
         pass
 

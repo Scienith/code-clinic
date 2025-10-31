@@ -779,6 +779,19 @@ def _run_mypy(cfg: QAConfig, logs_dir: Path) -> Tuple[str, str, Optional[int]]:
                 "warn_return_any = True",
                 "check_untyped_defs = True",
             ]
+        # Forbid Any family (gate-controlled)
+        try:
+            if bool(getattr(cfg.gates, "typecheck_disallow_any", False)):
+                lines += [
+                    "disallow_any_expr = True",
+                    "disallow_any_generics = True",
+                    "disallow_any_decorated = True",
+                    "disallow_any_unimported = True",
+                    "disallow_subclassing_any = True",
+                    "disallow_any_explicit = True",
+                ]
+        except Exception:
+            pass
         # Map tool.exclude to a robust mypy exclude regex (segment-based)
         try:
             ex_globs = list(getattr(cfg.tool, 'exclude', []) or [])

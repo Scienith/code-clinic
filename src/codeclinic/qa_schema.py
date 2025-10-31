@@ -423,6 +423,7 @@ def validate_qa_yaml(data: dict) -> None:
                 errors_max: Optional[int] = None
                 config_file: Optional[str] = None
                 ignore_missing_imports: Optional[List[str]] = None
+                disallow_any: Optional[bool] = None
 
             class TestsGateModel(BaseModel):
                 class Config:
