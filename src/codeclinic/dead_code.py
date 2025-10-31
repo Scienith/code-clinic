@@ -210,7 +210,11 @@ class _SymVisitor(ast.NodeVisitor):
         return None
 
     def _resolve_attr(self, value: ast.AST, attr: str) -> Optional[str]:
-        # mod.SYM
+        # self.attr / cls.attr — handle before generic Name case
+        if isinstance(value, ast.Name) and value.id in {"self", "cls"} and self.class_stack:
+            cls_fqn = self.class_stack[-1]
+            return f"{cls_fqn}.{attr}"
+        # mod.SYM or ClassName.attr within same module
         if isinstance(value, ast.Name):
             base = value.id
             # local alias stack first
@@ -228,10 +232,6 @@ class _SymVisitor(ast.NodeVisitor):
                 fqn = self.mod.defs[base]
                 return f"{fqn}.{attr}"
             return None
-        # self.attr / cls.attr
-        if isinstance(value, ast.Name) and value.id in {"self", "cls"} and self.class_stack:
-            cls_fqn = self.class_stack[-1]
-            return f"{cls_fqn}.{attr}"
         # super().meth()
         if isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == "super":
             # Resolve to all direct bases with same member name (best-effort) → connect to each candidate
