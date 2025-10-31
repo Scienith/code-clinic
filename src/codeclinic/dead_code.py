@@ -184,8 +184,12 @@ class _SymVisitor(ast.NodeVisitor):
         self.alias_stack: List[Dict[str, str]] = []
         # Learned attribute types per class: {class_fqn: {attr: type_fqn}}
         self.attr_types_by_class: Dict[str, Dict[str, str]] = {}
+        # Learned attribute element types for containers per class: {class_fqn: {attr: elem_type_fqn}}
+        self.attr_elem_types_by_class: Dict[str, Dict[str, str]] = {}
         # Function-scope variable types (from param annotations/returns)
         self.var_types_stack: List[Dict[str, str]] = []
+        # Function-scope variable element types for containers
+        self.var_elem_types_stack: List[Dict[str, str]] = []
 
     # --- helpers ---
     def _current_fqn(self) -> Optional[str]:
@@ -372,6 +376,7 @@ class _SymVisitor(ast.NodeVisitor):
         self.alias_stack.append({})
         # push local var types scope (initialize from parameter annotations)
         vtypes: Dict[str, str] = {}
+        velem: Dict[str, str] = {}
         try:
             args = getattr(node, "args", None)
             if args is not None:
@@ -384,21 +389,41 @@ class _SymVisitor(ast.NodeVisitor):
                         continue
                     ann = getattr(a, "annotation", None)
                     if ann is not None:
-                        tname = self._name_of_expr(ann)
-                        if tname:
-                            tfqn = self._resolve_any(tname) or tname
-                            pname = getattr(a, "arg", "")
-                            if pname:
-                                vtypes[pname] = str(tfqn)
-                                # Optionally, count parameter annotation as usage
-                                try:
-                                    if GLOBAL_INCLUDE_ANNOTATIONS and tfqn:
-                                        self._add_edge(str(tfqn), "annotation", a)
-                                except Exception:
-                                    pass
+                        pname = getattr(a, "arg", "")
+                        # If annotation is a subscript (e.g., List[T]) capture both base and element type
+                        if isinstance(ann, ast.Subscript):
+                            base = self._name_of_expr(getattr(ann, "value", None))
+                            if base:
+                                tfqn_base = self._resolve_any(base) or base
+                                if pname:
+                                    vtypes[pname] = str(tfqn_base)
+                                sl = getattr(ann, "slice", None)
+                                first = None
+                                if isinstance(sl, ast.Tuple) and sl.elts:
+                                    first = sl.elts[0]
+                                elif sl is not None:
+                                    first = sl
+                                if first is not None:
+                                    elem_name = self._name_of_expr(first)
+                                    if elem_name and pname:
+                                        elem_fqn = self._resolve_any(elem_name) or elem_name
+                                        velem[pname] = str(elem_fqn)
+                        else:
+                            tname = self._name_of_expr(ann)
+                            if tname:
+                                tfqn = self._resolve_any(tname) or tname
+                                if pname:
+                                    vtypes[pname] = str(tfqn)
+                        # Optionally, count parameter annotation as usage
+                        try:
+                            if GLOBAL_INCLUDE_ANNOTATIONS and tfqn:
+                                self._add_edge(str(tfqn), "annotation", a)
+                        except Exception:
+                            pass
         except Exception:
             pass
         self.var_types_stack.append(vtypes)
+        self.var_elem_types_stack.append(velem)
         # track inner defs in this function for return-escape
         self.inner_defs_in_cur_func = set()
         for st in getattr(node, "body", []) or []:
@@ -408,6 +433,23 @@ class _SymVisitor(ast.NodeVisitor):
         for st in getattr(node, "body", []) or []:
             # leverage generic visitor for nested handling
             self.visit(st)
+        # Post-walk: ensure inner function/class returned are linked via return-escape
+        try:
+            for st in getattr(node, "body", []) or []:
+                if isinstance(st, ast.Return):
+                    val = getattr(st, "value", None)
+                    if isinstance(val, ast.Name) and val.id in self.inner_defs_in_cur_func:
+                        ref = self._resolve_name(val.id)
+                        self._add_edge(ref, "return-escape", st)
+                    elif (
+                        isinstance(val, ast.Call)
+                        and isinstance(getattr(val, "func", None), ast.Name)
+                        and getattr(val.func, "id", "") in self.inner_defs_in_cur_func
+                    ):
+                        ref = self._resolve_name(getattr(val.func, "id", ""))
+                        self._add_edge(ref, "return-escape", st)
+        except Exception:
+            pass
         # Infer return types from simple `return ClassName(...)` patterns (PEP 604/Union 之外的补充)
         try:
             for st in getattr(node, "body", []) or []:
@@ -428,12 +470,14 @@ class _SymVisitor(ast.NodeVisitor):
         _ = self.alias_stack.pop() if self.alias_stack else None
         # pop local var types scope
         _ = self.var_types_stack.pop() if self.var_types_stack else None
+        _ = self.var_elem_types_stack.pop() if self.var_elem_types_stack else None
         # If this is __init__ of a class, infer simple `self.<attr> = <param>` types from annotations
         try:
             if kind == "method" and name == "__init__" and self.class_stack:
                 cls_fqn = self.class_stack[-1]
                 # map parameter name -> annotated type FQN
                 param_types: Dict[str, str] = {}
+                param_elem_types: Dict[str, str] = {}
                 fn_args = getattr(node, "args", None)
                 if fn_args is not None:
                     pos = list(getattr(fn_args, "args", []) or [])
@@ -443,12 +487,30 @@ class _SymVisitor(ast.NodeVisitor):
                     for a in params:
                         ann = getattr(a, "annotation", None)
                         if ann is not None:
-                            tname = self._name_of_expr(ann)
-                            if tname:
-                                tfqn = self._resolve_any(tname) or tname
-                                pname = getattr(a, "arg", "")
-                                if pname:
-                                    param_types[pname] = str(tfqn)
+                            pname = getattr(a, "arg", "")
+                            if isinstance(ann, ast.Subscript):
+                                base = self._name_of_expr(getattr(ann, "value", None))
+                                if base:
+                                    tfqn_base = self._resolve_any(base) or base
+                                    if pname:
+                                        param_types[pname] = str(tfqn_base)
+                                sl = getattr(ann, "slice", None)
+                                first = None
+                                if isinstance(sl, ast.Tuple) and sl.elts:
+                                    first = sl.elts[0]
+                                elif sl is not None:
+                                    first = sl
+                                if first is not None:
+                                    elem_name = self._name_of_expr(first)
+                                    if elem_name and pname:
+                                        elem_fqn = self._resolve_any(elem_name) or elem_name
+                                        param_elem_types[pname] = str(elem_fqn)
+                            else:
+                                tname = self._name_of_expr(ann)
+                                if tname:
+                                    tfqn = self._resolve_any(tname) or tname
+                                    if pname:
+                                        param_types[pname] = str(tfqn)
                 for st in list(getattr(node, "body", []) or []):
                     if isinstance(st, ast.Assign):
                         val = getattr(st, "value", None)
@@ -462,6 +524,9 @@ class _SymVisitor(ast.NodeVisitor):
                                     attrn = getattr(tgt, "attr", "")
                                     if attrn:
                                         self.attr_types_by_class.setdefault(cls_fqn, {})[attrn] = param_types[val.id]
+                                        et = param_elem_types.get(val.id)
+                                        if et:
+                                            self.attr_elem_types_by_class.setdefault(cls_fqn, {})[attrn] = et
         except Exception:
             pass
         self.func_stack.pop()
@@ -595,15 +660,38 @@ class _SymVisitor(ast.NodeVisitor):
                 val = getattr(node, "value", None)
                 tfqn: Optional[str] = None
                 if isinstance(val, ast.Name) and self.var_types_stack:
-                    tfqn = (self.var_types_stack[-1] or {}).get(getattr(val, "id", ""))
+                    vname = getattr(val, "id", "")
+                    tfqn = (self.var_types_stack[-1] or {}).get(vname)
                 elif isinstance(val, ast.Call):
                     callee = self._name_of_expr(getattr(val, "func", None))
                     if callee:
                         tfqn = str(self._resolve_any(callee) or callee)
+                    # if assigning from list(executors) etc., propagate element type from arg
+                    try:
+                        if self.var_elem_types_stack:
+                            args0 = None
+                            if getattr(val, "args", None):
+                                args0 = val.args[0]
+                            if isinstance(args0, ast.Name):
+                                et = (self.var_elem_types_stack[-1] or {}).get(getattr(args0, "id", ""))
+                                if et:
+                                    for fn in field_names:
+                                        if fn:
+                                            self.attr_elem_types_by_class.setdefault(cls_fqn, {})[fn] = et
+                    except Exception:
+                        pass
                 if tfqn:
                     for fn in field_names:
                         if fn:
                             self.attr_types_by_class.setdefault(cls_fqn, {})[fn] = tfqn
+                            # also propagate element type for containers if available
+                            try:
+                                if isinstance(val, ast.Name) and self.var_elem_types_stack:
+                                    et = (self.var_elem_types_stack[-1] or {}).get(vname)
+                                    if et:
+                                        self.attr_elem_types_by_class.setdefault(cls_fqn, {})[fn] = et
+                            except Exception:
+                                pass
         except Exception:
             pass
         self.generic_visit(node)
@@ -684,10 +772,27 @@ class _SymVisitor(ast.NodeVisitor):
                 name = getattr(node.target, "id", "")
                 ann = getattr(node, "annotation", None)
                 if name and ann is not None and self.var_types_stack:
-                    tname = self._name_of_expr(ann)
-                    if tname:
-                        tfqn = self._resolve_any(tname) or tname
-                        self.var_types_stack[-1][name] = str(tfqn)
+                    if isinstance(ann, ast.Subscript):
+                        base = self._name_of_expr(getattr(ann, "value", None))
+                        if base:
+                            tfqn_base = self._resolve_any(base) or base
+                            self.var_types_stack[-1][name] = str(tfqn_base)
+                        sl = getattr(ann, "slice", None)
+                        first = None
+                        if isinstance(sl, ast.Tuple) and sl.elts:
+                            first = sl.elts[0]
+                        elif sl is not None:
+                            first = sl
+                        if first is not None:
+                            elem_name = self._name_of_expr(first)
+                            if elem_name and self.var_elem_types_stack:
+                                elem_fqn = self._resolve_any(elem_name) or elem_name
+                                self.var_elem_types_stack[-1][name] = str(elem_fqn)
+                    else:
+                        tname = self._name_of_expr(ann)
+                        if tname:
+                            tfqn = self._resolve_any(tname) or tname
+                            self.var_types_stack[-1][name] = str(tfqn)
                         # Optionally, count local var annotation as usage
                         try:
                             if GLOBAL_INCLUDE_ANNOTATIONS and tfqn:
@@ -698,12 +803,53 @@ class _SymVisitor(ast.NodeVisitor):
             pass
         self.generic_visit(node)
 
+    def visit_For(self, node: ast.For) -> None:
+        """Infer type of iteration variable from iterables with known element type.
+        Supports 'for x in self.<field>' when <field> is a container with learned element type,
+        and 'for x in var' when var has a known element type from annotations.
+        """
+        try:
+            target = getattr(node, "target", None)
+            iter_ = getattr(node, "iter", None)
+            if isinstance(target, ast.Name) and self.var_types_stack:
+                # for x in self.<field>
+                if (
+                    isinstance(iter_, ast.Attribute)
+                    and isinstance(getattr(iter_, "value", None), ast.Name)
+                    and getattr(iter_.value, "id", None) == "self"
+                    and self.class_stack
+                ):
+                    cls_fqn = self.class_stack[-1]
+                    field = getattr(iter_, "attr", "")
+                    et = (self.attr_elem_types_by_class.get(cls_fqn) or {}).get(field)
+                    if et:
+                        self.var_types_stack[-1][target.id] = et
+                # for x in some_list
+                elif isinstance(iter_, ast.Name) and self.var_elem_types_stack:
+                    et = (self.var_elem_types_stack[-1] or {}).get(getattr(iter_, "id", ""))
+                    if et:
+                        self.var_types_stack[-1][target.id] = et
+        except Exception:
+            pass
+        self.generic_visit(node)
+
     def visit_Return(self, node: ast.Return) -> None:
         # return-escape: return inner def/class
         val = getattr(node, "value", None)
         if isinstance(val, ast.Name) and val.id in self.inner_defs_in_cur_func:
             ref = self._resolve_name(val.id)
             self._add_edge(ref, "return-escape", node)
+        # Also handle 'return inner_fn(...)' where inner_fn is defined in this function
+        try:
+            if (
+                isinstance(val, ast.Call)
+                and isinstance(getattr(val, "func", None), ast.Name)
+                and getattr(val.func, "id", "") in self.inner_defs_in_cur_func
+            ):
+                ref = self._resolve_name(getattr(val.func, "id", ""))
+                self._add_edge(ref, "return-escape", node)
+        except Exception:
+            pass
         self.generic_visit(node)
 
     def visit_List(self, node: ast.List) -> None:
@@ -1187,6 +1333,23 @@ def analyze_dead_code(
                         )
                         adj_typed.setdefault(pm_fqn, []).append(("protocol-impl", impl_m_fqn))
 
+        # Optional reverse credit: Impl.m used -> Port.m considered used (contract credit)
+        try:
+            dsts_set = {e.dst for e in edges}
+            for impl, ports in impl_to_ports.items():
+                # only if impl class is used (same gate as above)
+                if impl not in used_classes:
+                    continue
+                for p in ports:
+                    for m in port_methods.get(p, set()):
+                        impl_m = f"{impl}.{m}"
+                        port_m = f"{p}.{m}"
+                        if impl_m in dsts_set and port_m in syms:
+                            edges.append(Edge(src=impl_m, dst=port_m, type="protocol-decl", file="", line=0))
+                            adj_typed.setdefault(impl_m, []).append(("protocol-decl", port_m))
+        except Exception:
+            pass
+
     # Class inheritance override propagation (nominal): Base.m -> Derived.m when Derived overrides m
     # Build base -> derived mapping from resolved bases
     base_to_derived: Dict[str, Set[str]] = {}
@@ -1242,7 +1405,7 @@ def analyze_dead_code(
     if GLOBAL_INCLUDE_ANNOTATIONS:
         DIRECT_USAGE = set(DIRECT_USAGE)
         DIRECT_USAGE.add("annotation")
-    NOMINAL = {"inherit-override", "protocol-impl"}
+    NOMINAL = {"inherit-override", "protocol-impl", "protocol-decl"}
 
     def _reachable_via_pattern(roots: Set[str]) -> Set[str]:
         reachable_all: Set[Tuple[str, int]] = set()
