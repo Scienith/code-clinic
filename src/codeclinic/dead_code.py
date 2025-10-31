@@ -599,6 +599,22 @@ class _SymVisitor(ast.NodeVisitor):
                 ref = self._name_of_expr(expr.func)
                 if ref:
                     self._add_edge(self._resolve_any(ref), "call", expr)
+                else:
+                    # Fallback for self.<field>.method(...) using learned field types
+                    fn = getattr(expr, "func", None)
+                    if (
+                        isinstance(fn, ast.Attribute)
+                        and isinstance(getattr(fn, "value", None), ast.Attribute)
+                        and isinstance(getattr(fn.value, "value", None), ast.Name)
+                        and getattr(fn.value.value, "id", None) == "self"
+                        and self.class_stack
+                    ):
+                        cls_fqn = self.class_stack[-1]
+                        field = getattr(fn.value, "attr", "")
+                        mname = getattr(fn, "attr", "")
+                        tfqn = (self.attr_types_by_class.get(cls_fqn) or {}).get(field)
+                        if tfqn and mname:
+                            self._add_edge(f"{tfqn}.{mname}", "call", expr)
                 # recurse into args/keywords
                 for a in list(getattr(expr, "args", []) or []):
                     self._record_callable_uses(a)
