@@ -565,9 +565,6 @@ class _SymVisitor(ast.NodeVisitor):
                         if owner and mname:
                             callee_fqn = f"{owner}.{mname}"
                             rts = GLOBAL_FN_RETURN_TYPES.get(str(callee_fqn), [])
-                            # Special-case: ExecContext.spawn returns ExecContext
-                            if (not rts) and owner.endswith("ExecContext") and mname == "spawn":
-                                rts = [owner]
                             target_type = next((t for t in rts if t and t not in {"None", "NoneType"}), None)
                             if target_type:
                                 for t in getattr(node, "targets", []) or []:
