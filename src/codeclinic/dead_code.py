@@ -447,6 +447,17 @@ class _SymVisitor(ast.NodeVisitor):
                 self._record_callable_uses(val)
         except Exception:
             pass
+        # Function-scope variable alias: svc = ClassName(...)
+        try:
+            if self.func_stack and isinstance(getattr(node, "value", None), ast.Call):
+                callee = self._name_of_expr(getattr(node.value, "func", None))
+                if callee:
+                    resolved = self._resolve_any(callee) or callee
+                    for t in getattr(node, "targets", []) or []:
+                        if isinstance(t, ast.Name) and self.alias_stack:
+                            self.alias_stack[-1][t.id] = str(resolved)
+        except Exception:
+            pass
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
