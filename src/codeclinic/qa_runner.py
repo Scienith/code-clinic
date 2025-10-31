@@ -76,7 +76,7 @@ def qa_init(force: bool = False) -> None:
 
 
 def qa_run(
-    config_path: str = "codeclinic.yaml", output_override: Optional[str] = None
+    config_path: str = "codeclinic.yaml", output_override: Optional[str] = None, explain_fqn: Optional[str] = None
 ) -> int:
     try:
         cfg = load_qa_config(config_path)
@@ -293,6 +293,32 @@ def qa_run(
     }
     # Dead code analysis (optional gate)
     dc_count, dc_report = _ext_dead_code(cfg, artifacts_dir)
+    # If explanation requested, compute one path and print/save it
+    if explain_fqn:
+        try:
+            from .dead_code import explain_usage_path
+
+            exp = explain_usage_path(
+                paths=cfg.tool.paths,
+                include=cfg.tool.include,
+                exclude=list(cfg.tool.exclude or []),
+                target_fqn=explain_fqn,
+                allow_module_export_closure=bool(getattr(cfg.gates, "dead_code_allow_module_export_closure", False)),
+                whitelist_roots=list(getattr(cfg.gates, "dead_code_whitelist", []) or []),
+            )
+            # Write artifact
+            dc_dir = artifacts_dir / "dead_code"
+            dc_dir.mkdir(parents=True, exist_ok=True)
+            import re as _re
+
+            safe = _re.sub(r"[^A-Za-z0-9_.-]", "_", explain_fqn)
+            exp_path = dc_dir / f"explain_{safe}.json"
+            (exp_path).write_text(json.dumps(exp, ensure_ascii=False, indent=2), encoding="utf-8")
+            # Also print to stdout for immediate inspection
+            print("\n🔍 Dead-code explain path:")
+            print(json.dumps(exp, ensure_ascii=False, indent=2))
+        except Exception as e:
+            print(f"⚠ 无法生成 dead-code explain 路径: {e}")
     results["metrics"]["dead_code"] = {
         "violations": dc_count,
         "report": str(dc_report) if dc_report else None,

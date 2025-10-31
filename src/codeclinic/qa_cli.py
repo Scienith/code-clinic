@@ -35,6 +35,10 @@ def qa_cli_main(argv: list[str] | None = None) -> None:
     p_run.add_argument(
         "--output", default=None, help="Override output directory (default from config)"
     )
+    p_run.add_argument(
+        "--explain", dest="explain_fqn", default=None,
+        help="Explain one dead-code usage path to <FQN> (prints JSON)"
+    )
 
     p_fix = sub.add_parser("fix", help="Auto-fix format/lint issues only")
     p_fix.add_argument(
@@ -57,7 +61,7 @@ def qa_cli_main(argv: list[str] | None = None) -> None:
     if args.qa_cmd == "run":
         from .qa_runner import qa_run
 
-        exit_code = qa_run(config_path=args.config, output_override=args.output)
+        exit_code = qa_run(config_path=args.config, output_override=args.output, explain_fqn=args.explain_fqn)
         sys.exit(exit_code)
 
     if args.qa_cmd == "fix":

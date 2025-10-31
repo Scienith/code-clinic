@@ -9,6 +9,9 @@ Implements the rules discussed:
  - Exclusions: mere imports without use, type annotations (incl. TYPE_CHECKING) ignored by default, dynamic/reflection ignored.
 
 Outputs a JSON report with nodes, edges, roots, reachable and dead symbols.
+Also exposes an explain-path helper that returns one root→target path
+under the default path policy described in docs:
+  alias* (call|value-flow|decorator|exception|isinstance|property|return-escape|descriptor)+
 """
 from __future__ import annotations
 
@@ -17,6 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import ast
+import sys
 import fnmatch
 import os
 
@@ -378,6 +382,15 @@ class _SymVisitor(ast.NodeVisitor):
                     if isinstance(t, ast.Name):
                         # Register as module-level alias mapping
                         self.mod.alias[t.id] = resolved or rhs_ref
+                        # Also record an alias edge so path engine can honor alias* prefix
+                        try:
+                            src = _sym_fqn(self.mod.fqn, t.id)
+                            dst = self._resolve_any(rhs_ref) or rhs_ref
+                            self.edges.append(
+                                Edge(src=src, dst=dst, type="alias", file=str(self.mod.path), line=getattr(node, "lineno", 0) or 0)
+                            )
+                        except Exception:
+                            pass
         # Also record call edges for RHS constructor calls and nested argument calls
         try:
             val = getattr(node, "value", None)
@@ -540,6 +553,17 @@ def _parse_module(file_path: Path, module_fqn: str) -> ModuleInfo:
                 name = alias.name  # 'a' or 'a.b'
                 asname = alias.asname or name.split(".")[0]
                 mod.alias[asname] = name
+                # add explicit alias edge for path engine
+                try:
+                    src = f"{module_fqn}.{asname}"
+                    dst = name
+                    # leave as module/name, later alias-chain rewrite may resolve
+                    pass
+                finally:
+                    # even if resolution fails, keep a best-effort edge
+                    edges = getattr(sys.modules.get(__name__), "_tmp_edges_alias", None)  # type: ignore
+                    if isinstance(edges, list):
+                        edges.append(Edge(src=src, dst=dst, type="alias", file=str(file_path), line=getattr(node, "lineno", 0) or 0))  # type: ignore
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
             level = getattr(node, "level", 0) or 0
@@ -555,13 +579,32 @@ def _parse_module(file_path: Path, module_fqn: str) -> ModuleInfo:
                 if alias.name == "*":
                     continue
                 asname = alias.asname or alias.name
-                mod.alias[asname] = f"{module}.{alias.name}" if module else alias.name
+                tgt = f"{module}.{alias.name}" if module else alias.name
+                mod.alias[asname] = tgt
+                # add alias edge so path engine can see alias transitions
+                try:
+                    src = f"{module_fqn}.{asname}"
+                    dst = tgt
+                finally:
+                    edges = getattr(sys.modules.get(__name__), "_tmp_edges_alias", None)  # type: ignore
+                    if isinstance(edges, list):
+                        edges.append(Edge(src=src, dst=dst, type="alias", file=str(file_path), line=getattr(node, "lineno", 0) or 0))  # type: ignore
 
     # collect defs + edges
     defs: Dict[str, Sym] = {}
     edges: List[Edge] = []
+    # scratch pad for import/alias edges discovered before visitor runs
+    import sys as _sys  # local alias to avoid pollution
+    _sys.modules[__name__].__dict__["_tmp_edges_alias"] = []  # type: ignore
     vis = _SymVisitor(mod, defs, edges)
     vis.visit(tree)
+    # merge pre-collected alias edges
+    try:
+        pre_alias: List[Edge] = _sys.modules[__name__].__dict__.pop("_tmp_edges_alias", [])  # type: ignore
+        if pre_alias:
+            edges.extend(pre_alias)
+    except Exception:
+        pass
 
     # register module-level defs discovered by visitor
     for local, fqn in mod.defs.items():
@@ -664,11 +707,11 @@ def analyze_dead_code(
                     if fqn.endswith("." + w) or fqn.split(".")[-1] == w:
                         root_syms.add(fqn)
 
-    # Build adjacency
-    adj: Dict[str, Set[str]] = {}
+    # Build adjacency with typed edges
+    adj_typed: Dict[str, List[Tuple[str, str]]] = {}
     for e in edges:
-        if e.dst in syms:
-            adj.setdefault(e.src, set()).add(e.dst)
+        if e.dst in syms or (isinstance(e.dst, str) and e.dst):
+            adj_typed.setdefault(e.src, []).append((e.type, e.dst))
 
     # Nominal protocol propagation: Port.m -> Impl.m
     if protocol_nominal:
@@ -764,24 +807,50 @@ def analyze_dead_code(
             edges.append(Edge(src=base_m_fqn, dst=drv_m, type="inherit-override", file="", line=0))
             adj.setdefault(base_m_fqn, set()).add(drv_m)
 
-    # Traverse
-    reachable: Set[str] = set()
-    direct: Set[str] = set()
+    # Traverse with simple path-policy NFA (two states):
+    #   S0: only 'alias' edges allowed (alias*)
+    #   S1: after first direct-usage edge, allow {usage, nominal}*
+    DIRECT_USAGE = {
+        "call",
+        "value-flow",
+        "decorator",
+        "exception",
+        "isinstance",
+        "property",
+        "return-escape",
+        "descriptor",
+    }
+    NOMINAL = {"inherit-override", "protocol-impl"}
 
-    for r in root_syms:
-        stack = [(r, 0)]
-        seen: Set[str] = set()
-        while stack:
-            cur, dist = stack.pop()
-            if cur in seen:
-                continue
-            seen.add(cur)
-            reachable.add(cur)
-            if dist == 1:
-                direct.add(cur)
-            for nxt in adj.get(cur, set()):
-                if nxt not in seen:
-                    stack.append((nxt, dist + 1))
+    def _reachable_via_pattern(roots: Set[str]) -> Set[str]:
+        reachable_all: Set[Tuple[str, int]] = set()
+        out_nodes: Set[str] = set()
+        for r in roots:
+            stack: List[Tuple[str, int]] = [(r, 1)]  # roots are accepted as reachable; start in S1 for root itself
+            visited: Set[Tuple[str, int]] = set()
+            while stack:
+                node, state = stack.pop()
+                if (node, state) in visited:
+                    continue
+                visited.add((node, state))
+                reachable_all.add((node, state))
+                out_nodes.add(node)
+                for et, nxt in adj_typed.get(node, []) or []:
+                    if state == 0:
+                        if et == "alias":
+                            stack.append((nxt, 0))
+                        elif et in DIRECT_USAGE:
+                            stack.append((nxt, 1))
+                        else:
+                            continue
+                    else:  # state == 1
+                        if et in DIRECT_USAGE or et in NOMINAL or et == "alias":
+                            # allow alias even after usage for robustness
+                            stack.append((nxt, 1))
+        return out_nodes
+
+    reachable = _reachable_via_pattern(root_syms)
+    direct: Set[str] = set()  # retained for compatibility if needed
 
     # Policy closure: exported class -> entire class body
     policy: Set[str] = set()
@@ -813,7 +882,7 @@ def analyze_dead_code(
             {"fqn": s.fqn, "kind": s.kind, "file": s.file, "line": s.line}
             for s in syms.values()
         ],
-        "edges": [e.__dict__ for e in edges if e.dst in syms],
+        "edges": [e.__dict__ for e in edges if isinstance(e.dst, str) and e.dst],
     }
     return report, len(dead)
 
@@ -845,3 +914,106 @@ def save_dead_code_report(
         __import__("json").dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     return dead_count, out
+
+
+def explain_usage_path(
+    paths: List[str],
+    include: List[str],
+    exclude: List[str],
+    target_fqn: str,
+    allow_module_export_closure: bool = False,
+    whitelist_roots: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Return one root→target explain path under the default path policy.
+
+    The result includes: {found: bool, target: str, root: str|None, path_edges: [Edge-like dicts]}
+    """
+    report, _ = analyze_dead_code(
+        paths=paths,
+        include=include,
+        exclude=exclude,
+        allow_module_export_closure=allow_module_export_closure,
+        whitelist_roots=whitelist_roots,
+        protocol_nominal=True,
+        protocol_strict_signature=True,
+    )
+    # Build typed adjacency from report edges
+    edges = report.get("edges", [])
+    nodes = {n.get("fqn") for n in report.get("nodes", [])}
+    roots = set(report.get("roots", []) or [])
+    adj: Dict[str, List[Tuple[str, str, Dict[str, Any]]]] = {}
+    for e in edges:
+        src = e.get("src")
+        dst = e.get("dst")
+        et = e.get("type")
+        if not src or not dst or not et:
+            continue
+        adj.setdefault(src, []).append((et, dst, e))
+
+    DIRECT_USAGE = {
+        "call",
+        "value-flow",
+        "decorator",
+        "exception",
+        "isinstance",
+        "property",
+        "return-escape",
+        "descriptor",
+    }
+    NOMINAL = {"inherit-override", "protocol-impl"}
+
+    target = target_fqn
+    if target not in nodes:
+        # best-effort: permit suffix match
+        for n in nodes:
+            if n.endswith("." + target) or n.split(".")[-1] == target:
+                target = n
+                break
+
+    # Product-BFS over (node, state)
+    from collections import deque
+
+    for root in roots:
+        q = deque()
+        q.append((root, 1))  # start in accepted state at root
+        prev: Dict[Tuple[str, int], Tuple[Tuple[str, int], Dict[str, Any]]] = {}
+        seen: Set[Tuple[str, int]] = set()
+        while q:
+            node, state = q.popleft()
+            if (node, state) in seen:
+                continue
+            seen.add((node, state))
+            if node == target and state == 1:
+                # reconstruct
+                path_edges: List[Dict[str, Any]] = []
+                cur = (node, state)
+                while cur in prev:
+                    parent, ed = prev[cur]
+                    path_edges.append(ed)
+                    cur = parent
+                path_edges.reverse()
+                return {
+                    "found": True,
+                    "root": root,
+                    "target": target,
+                    "path_edges": path_edges,
+                }
+            for et, nxt, ed in adj.get(node, []) or []:
+                if state == 0:
+                    if et == "alias":
+                        ns = (nxt, 0)
+                        if ns not in seen:
+                            prev[ns] = ((node, state), ed)
+                            q.append(ns)
+                    elif et in DIRECT_USAGE:
+                        ns = (nxt, 1)
+                        if ns not in seen:
+                            prev[ns] = ((node, state), ed)
+                            q.append(ns)
+                else:
+                    if et in DIRECT_USAGE or et in NOMINAL or et == "alias":
+                        ns = (nxt, 1)
+                        if ns not in seen:
+                            prev[ns] = ((node, state), ed)
+                            q.append(ns)
+    return {"found": False, "root": None, "target": target_fqn, "path_edges": []}
