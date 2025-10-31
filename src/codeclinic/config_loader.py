@@ -73,19 +73,7 @@ class ExtendedConfig:
     # 导入规则配置
     import_rules: ImportRulesConfig = field(default_factory=ImportRulesConfig)
 
-    def to_legacy_config(self):
-        """转换为旧版Config对象，保持向后兼容"""
-        from .config import Config
-
-        return Config(
-            paths=self.paths,
-            include=self.include,
-            exclude=self.exclude,
-            aggregate=self.aggregate,
-            format=self.format,
-            output=self.output,
-            count_private=self.count_private,
-        )
+    # Legacy conversion removed
 
 
 def load_config(config_path: Optional[Path] = None) -> ExtendedConfig:
@@ -435,25 +423,7 @@ def save_example_config(output_path: Path = None) -> Path:
     return output_path
 
 
-# 向后兼容的函数
-def load_legacy_config(cwd: str = None):
-    """加载旧版配置格式，保持向后兼容"""
-    if cwd is None:
-        cwd = os.getcwd()
-
-    config_path = find_config_file()
-    if config_path:
-        extended_config = load_config(config_path)
-        # 将扩展配置转换为旧版Config
-        legacy_config = extended_config.to_legacy_config()
-        # 添加import_rules信息到旧版配置
-        setattr(legacy_config, "import_rules", extended_config.import_rules)
-        return legacy_config
-
-    # 如果没有找到新配置，尝试加载旧版配置
-    from .config import Config
-
-    return Config.from_files(cwd)
+# Backward-compat config loader removed
 
 
 def _show_default_config_info() -> None:

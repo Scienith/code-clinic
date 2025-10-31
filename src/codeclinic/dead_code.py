@@ -56,6 +56,8 @@ class ModuleInfo:
 # Global registry of function/method return types across all parsed modules
 # Maps callee FQN -> list of return type FQNs (best-effort)
 GLOBAL_FN_RETURN_TYPES: Dict[str, List[str]] = {}
+# Global toggle: treat type annotations as usage (adds 'annotation' edges and makes them count in traversal)
+GLOBAL_INCLUDE_ANNOTATIONS: bool = False
 
 
 def _collect_py_files(paths: List[str], include: List[str], exclude: List[str]) -> List[Path]:
@@ -344,6 +346,13 @@ class _SymVisitor(ast.NodeVisitor):
                     if not hasattr(self, "fn_return_types"):
                         self.fn_return_types = {}
                     self.fn_return_types[fqn] = types
+                    # Optionally, count return annotation as usage
+                    try:
+                        if GLOBAL_INCLUDE_ANNOTATIONS:
+                            for t in types:
+                                self._add_edge(t, "annotation", node)
+                    except Exception:
+                        pass
         except Exception:
             pass
 
@@ -381,6 +390,12 @@ class _SymVisitor(ast.NodeVisitor):
                             pname = getattr(a, "arg", "")
                             if pname:
                                 vtypes[pname] = str(tfqn)
+                                # Optionally, count parameter annotation as usage
+                                try:
+                                    if GLOBAL_INCLUDE_ANNOTATIONS and tfqn:
+                                        self._add_edge(str(tfqn), "annotation", a)
+                                except Exception:
+                                    pass
         except Exception:
             pass
         self.var_types_stack.append(vtypes)
@@ -673,6 +688,12 @@ class _SymVisitor(ast.NodeVisitor):
                     if tname:
                         tfqn = self._resolve_any(tname) or tname
                         self.var_types_stack[-1][name] = str(tfqn)
+                        # Optionally, count local var annotation as usage
+                        try:
+                            if GLOBAL_INCLUDE_ANNOTATIONS and tfqn:
+                                self._add_edge(str(tfqn), "annotation", node)
+                        except Exception:
+                            pass
         except Exception:
             pass
         self.generic_visit(node)
@@ -929,6 +950,7 @@ def _parse_module(file_path: Path, module_fqn: str) -> ModuleInfo:
     import sys as _sys  # local alias to avoid pollution
     _sys.modules[__name__].__dict__["_tmp_edges_alias"] = []  # type: ignore
     vis = _SymVisitor(mod, defs, edges)
+    # Configuration flags may be injected later by caller through attribute set before visit
     vis.visit(tree)
     # merge function return types into global registry
     try:
@@ -979,6 +1001,9 @@ def analyze_dead_code(
         GLOBAL_FN_RETURN_TYPES.clear()
     except Exception:
         pass
+    # Set global include-annotations toggle for the current run
+    global GLOBAL_INCLUDE_ANNOTATIONS
+    GLOBAL_INCLUDE_ANNOTATIONS = bool(include_annotations)
     roots_base = [Path(p) for p in paths]
     files = _collect_py_files(paths, include, exclude)
     tops = _find_top_packages(paths)
@@ -1214,6 +1239,9 @@ def analyze_dead_code(
         "descriptor",
         "constructor",
     }
+    if GLOBAL_INCLUDE_ANNOTATIONS:
+        DIRECT_USAGE = set(DIRECT_USAGE)
+        DIRECT_USAGE.add("annotation")
     NOMINAL = {"inherit-override", "protocol-impl"}
 
     def _reachable_via_pattern(roots: Set[str]) -> Set[str]:
