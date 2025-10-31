@@ -1116,8 +1116,9 @@ def analyze_dead_code(
                     if protocol_strict_signature:
                         pm = syms.get(pm_fqn)
                         im = syms.get(impl_m_fqn)
-                        if pm and im and pm.arity >= 0 and im.arity >= 0 and pm.arity != im.arity:
-                            continue
+                        if pm and im and pm.arity >= 0 and im.arity >= 0:
+                            if not (pm.arity == im.arity or abs(pm.arity - im.arity) == 1):
+                                continue
                     if impl_m_fqn in syms:
                         edges.append(
                             Edge(src=pm_fqn, dst=impl_m_fqn, type="protocol-impl", file="", line=0)
@@ -1156,8 +1157,9 @@ def analyze_dead_code(
             if protocol_strict_signature:
                 bm = syms.get(base_m_fqn)
                 dm = syms.get(drv_m)
-                if bm and dm and bm.arity >= 0 and dm.arity >= 0 and bm.arity != dm.arity:
-                    continue
+                if bm and dm and bm.arity >= 0 and dm.arity >= 0:
+                    if not (bm.arity == dm.arity or abs(bm.arity - dm.arity) == 1):
+                        continue
             edges.append(Edge(src=base_m_fqn, dst=drv_m, type="inherit-override", file="", line=0))
             adj_typed.setdefault(base_m_fqn, []).append(("inherit-override", drv_m))
 
