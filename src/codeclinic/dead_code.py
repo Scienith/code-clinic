@@ -552,6 +552,24 @@ class _SymVisitor(ast.NodeVisitor):
                         for t in getattr(node, "targets", []) or []:
                             if isinstance(t, ast.Name):
                                 self.var_types_stack[-1][t.id] = str(target_type)
+                else:
+                    # Attribute callee: v = obj.method(...), if obj has inferred type, consult its method return types
+                    if (
+                        isinstance(fn, ast.Attribute)
+                        and isinstance(getattr(fn, "value", None), ast.Name)
+                        and self.var_types_stack
+                    ):
+                        vname = getattr(fn.value, "id", "")
+                        owner = (self.var_types_stack[-1] or {}).get(vname)
+                        mname = getattr(fn, "attr", "")
+                        if owner and mname:
+                            callee_fqn = f"{owner}.{mname}"
+                            rts = GLOBAL_FN_RETURN_TYPES.get(str(callee_fqn), [])
+                            target_type = next((t for t in rts if t and t not in {"None", "NoneType"}), None)
+                            if target_type:
+                                for t in getattr(node, "targets", []) or []:
+                                    if isinstance(t, ast.Name):
+                                        self.var_types_stack[-1][t.id] = str(target_type)
         except Exception:
             pass
         # Class attribute type: self.<field> = Name -> learn from var_types
