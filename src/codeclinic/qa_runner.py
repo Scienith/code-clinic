@@ -874,6 +874,7 @@ def _run_mypy(cfg: QAConfig, logs_dir: Path) -> Tuple[str, str, Optional[int]]:
                 "disallow_any_expr = False",
             ]
         # Map tool.exclude to a robust mypy exclude regex (segment-based)
+        exclude_rx_cli = None
         try:
             ex_globs = list(getattr(cfg.tool, 'exclude', []) or [])
             segments = set()
@@ -884,10 +885,11 @@ def _run_mypy(cfg: QAConfig, logs_dir: Path) -> Tuple[str, str, Optional[int]]:
                         segments.add(name)
             if segments:
                 seg_alt = '|'.join(name.replace('.', '\\.') for name in sorted(segments))
-                rx = f'(?:^|.*/)(?:{seg_alt})/'
+                rx = f'(?:^|.*/)(?:{seg_alt})(?:/|$)'
                 lines += [f'exclude = {rx}']
+                exclude_rx_cli = rx
         except Exception:
-            pass
+            exclude_rx_cli = None
 # Per-module ignore_missing_imports sections
         try:
             patterns = list(getattr(cfg.tools.typecheck, "ignore_missing_imports", []) or [])
@@ -899,6 +901,12 @@ def _run_mypy(cfg: QAConfig, logs_dir: Path) -> Tuple[str, str, Optional[int]]:
     except Exception:
         pass
     args += ["--config-file", str(mypy_cfg)]
+    # Also pass exclude on CLI to ensure it applies regardless of mypy version quirks
+    try:
+        if exclude_rx_cli:
+            args += ["--exclude", str(exclude_rx_cli)]
+    except Exception:
+        pass
     if cfg.tools.typecheck.strict:
         args.append("--strict")
     code, out = _call(args)
