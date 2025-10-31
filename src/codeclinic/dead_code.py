@@ -662,6 +662,21 @@ class _SymVisitor(ast.NodeVisitor):
                     self._add_edge(self._resolve_any(ref), "exception", typ)
         self.generic_visit(node)
 
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        # Local variable annotation: x: Type = ...
+        try:
+            if self.func_stack and isinstance(getattr(node, "target", None), ast.Name):
+                name = getattr(node.target, "id", "")
+                ann = getattr(node, "annotation", None)
+                if name and ann is not None and self.var_types_stack:
+                    tname = self._name_of_expr(ann)
+                    if tname:
+                        tfqn = self._resolve_any(tname) or tname
+                        self.var_types_stack[-1][name] = str(tfqn)
+        except Exception:
+            pass
+        self.generic_visit(node)
+
     def visit_Return(self, node: ast.Return) -> None:
         # return-escape: return inner def/class
         val = getattr(node, "value", None)
