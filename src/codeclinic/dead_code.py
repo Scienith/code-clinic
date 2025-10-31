@@ -182,6 +182,8 @@ class _SymVisitor(ast.NodeVisitor):
         self.alias_stack: List[Dict[str, str]] = []
         # Learned attribute types per class: {class_fqn: {attr: type_fqn}}
         self.attr_types_by_class: Dict[str, Dict[str, str]] = {}
+        # Function-scope variable types (from param annotations/returns)
+        self.var_types_stack: List[Dict[str, str]] = []
 
     # --- helpers ---
     def _current_fqn(self) -> Optional[str]:
