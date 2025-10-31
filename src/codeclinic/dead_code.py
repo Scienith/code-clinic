@@ -319,6 +319,27 @@ class _SymVisitor(ast.NodeVisitor):
             ),
         )
 
+        # record return type annotation (best-effort)
+        try:
+            ann = getattr(node, "returns", None)
+            if ann is not None:
+                names = self._type_names_from_annotation(ann)
+                types: List[str] = []
+                for n in names:
+                    if not n or n in {"None", "NoneType"}:
+                        continue
+                    r = self._resolve_any(n) or n
+                    types.append(str(r))
+                if types:
+                    # store under current function FQN
+                    setattr(self, "_fn_return_types_init", True)
+                    # Initialize map lazily
+                    if not hasattr(self, "fn_return_types"):
+                        self.fn_return_types = {}
+                    self.fn_return_types[fqn] = types
+        except Exception:
+            pass
+
         # decorators
         for dec in getattr(node, "decorator_list", []) or []:
             for ref in self._refs_in_decorator(dec):
@@ -456,6 +477,24 @@ class _SymVisitor(ast.NodeVisitor):
                     for t in getattr(node, "targets", []) or []:
                         if isinstance(t, ast.Name) and self.alias_stack:
                             self.alias_stack[-1][t.id] = str(resolved)
+        except Exception:
+            pass
+        # Function-scope variable type: v = callee(...) with annotated return -> alias v to that type
+        try:
+            if self.func_stack and isinstance(getattr(node, "value", None), ast.Call):
+                fn = getattr(node.value, "func", None)
+                ref = self._name_of_expr(fn) if fn is not None else None
+                if ref:
+                    callee_fqn = self._resolve_any(ref) or ref
+                    rts = getattr(self, "fn_return_types", {}).get(str(callee_fqn), [])
+                    target_type = next((t for t in rts if t and t not in {"None", "NoneType"}), None)
+                    # Fallback: if callee is a class defined in current module, treat as constructor
+                    if not target_type and isinstance(callee_fqn, str) and callee_fqn in self.defs and self.defs[callee_fqn].kind == "class":
+                        target_type = callee_fqn
+                    if target_type and self.alias_stack:
+                        for t in getattr(node, "targets", []) or []:
+                            if isinstance(t, ast.Name):
+                                self.alias_stack[-1][t.id] = str(target_type)
         except Exception:
             pass
         self.generic_visit(node)
@@ -597,6 +636,45 @@ class _SymVisitor(ast.NodeVisitor):
         else:
             add_expr(dec)
         return refs
+
+    def _type_names_from_annotation(self, ann: ast.AST) -> List[str]:
+        """Extract base type names from annotation.
+        Supports Optional[T], Union[A,B], and PEP604 A|B best-effort.
+        """
+        out: List[str] = []
+        try:
+            if isinstance(ann, ast.Name):
+                out.append(ann.id)
+            elif isinstance(ann, ast.Attribute):
+                n = self._name_of_expr(ann)
+                if n:
+                    out.append(n)
+            elif isinstance(ann, ast.Subscript):
+                base = self._name_of_expr(getattr(ann, "value", None))
+                sl = getattr(ann, "slice", None)
+                items: List[ast.AST] = []
+                if isinstance(sl, ast.Tuple):
+                    items = list(sl.elts)
+                elif sl is not None:
+                    items = [sl]
+                base_s = base or ""
+                if base_s.endswith("Optional"):
+                    for it in items[:1]:
+                        out.extend(self._type_names_from_annotation(it))
+                elif base_s.endswith("Union"):
+                    for it in items:
+                        out.extend(self._type_names_from_annotation(it))
+                else:
+                    if base:
+                        out.append(base)
+            elif hasattr(ast, "BinOp") and isinstance(ann, ast.BinOp) and isinstance(getattr(ann, "op", None), ast.BitOr):
+                out.extend(self._type_names_from_annotation(getattr(ann, "left", None)))
+                out.extend(self._type_names_from_annotation(getattr(ann, "right", None)))
+            elif isinstance(ann, ast.Constant) and ann.value is None:
+                out.append("None")
+        except Exception:
+            pass
+        return out
 
 
 def _parse_module(file_path: Path, module_fqn: str) -> ModuleInfo:
@@ -798,7 +876,24 @@ def analyze_dead_code(
             if init_fqn in syms:
                 adj_typed.setdefault(s.fqn, []).append(("constructor", init_fqn))
 
-    # Nominal protocol propagation: Port.m -> Impl.m
+    # Identify classes that are directly "used" via direct usage edges (constructors/value-flow/etc.)
+    DIRECT_FOR_USED = {
+        "call",
+        "value-flow",
+        "decorator",
+        "exception",
+        "isinstance",
+        "property",
+        "return-escape",
+        "descriptor",
+        "constructor",
+    }
+    used_classes: Set[str] = set()
+    for e in edges:
+        if e.type in DIRECT_FOR_USED and e.dst in syms and syms[e.dst].kind == "class":
+            used_classes.add(e.dst)
+
+    # Nominal protocol propagation: Port.m -> Impl.m (only if impl class is used)
     if protocol_nominal:
         # collect protocol class fqns
         prot_set: Set[str] = set()
@@ -846,6 +941,9 @@ def analyze_dead_code(
                     if pm_fqn not in used_port_methods:
                         continue
                     impl_m_fqn = f"{impl}.{m}"
+                    # require that impl class is directly used
+                    if impl not in used_classes:
+                        continue
                     if protocol_strict_signature:
                         pm = syms.get(pm_fqn)
                         im = syms.get(impl_m_fqn)
@@ -855,7 +953,7 @@ def analyze_dead_code(
                         edges.append(
                             Edge(src=pm_fqn, dst=impl_m_fqn, type="protocol-impl", file="", line=0)
                         )
-                        adj.setdefault(pm_fqn, set()).add(impl_m_fqn)
+                        adj_typed.setdefault(pm_fqn, []).append(("protocol-impl", impl_m_fqn))
 
     # Class inheritance override propagation (nominal): Base.m -> Derived.m when Derived overrides m
     # Build base -> derived mapping from resolved bases
@@ -879,10 +977,12 @@ def analyze_dead_code(
         base_m_fqn = sym.fqn
         if base_m_fqn not in dsts_set:
             continue  # base method not used; skip
-        # For each derived of this base, propagate if override exists
+        # For each derived of this base, propagate if override exists and derived class is used
         for drv in base_to_derived.get(base_cls, set()) or []:
             drv_m = f"{drv}.{mname}"
             if drv_m not in syms:
+                continue
+            if drv not in used_classes:
                 continue
             if protocol_strict_signature:
                 bm = syms.get(base_m_fqn)
@@ -890,7 +990,7 @@ def analyze_dead_code(
                 if bm and dm and bm.arity >= 0 and dm.arity >= 0 and bm.arity != dm.arity:
                     continue
             edges.append(Edge(src=base_m_fqn, dst=drv_m, type="inherit-override", file="", line=0))
-            adj.setdefault(base_m_fqn, set()).add(drv_m)
+            adj_typed.setdefault(base_m_fqn, []).append(("inherit-override", drv_m))
 
     # Traverse with simple path-policy NFA (two states):
     #   S0: only 'alias' edges allowed (alias*)
