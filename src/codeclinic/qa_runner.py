@@ -864,11 +864,12 @@ def _run_mypy(cfg: QAConfig, logs_dir: Path) -> Tuple[str, str, Optional[int]]:
                     mn = mod_name_of(Path(f))
                     if mn:
                         matched_modules.add(mn)
-        # Attach per-module disables for disallow_any_decorated
+        # Attach per-module disables for disallow_any_decorated and disallow_any_expr (decorator call expressions)
         for mn in sorted(matched_modules):
             lines += [
                 f"[mypy-{mn}]",
                 "disallow_any_decorated = False",
+                "disallow_any_expr = False",
             ]
         # Map tool.exclude to a robust mypy exclude regex (segment-based)
         try:
