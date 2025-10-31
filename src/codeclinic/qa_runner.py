@@ -826,7 +826,9 @@ def _run_mypy(cfg: QAConfig, logs_dir: Path) -> Tuple[str, str, Optional[int]]:
                 return None
             import ast as _ast
             def _dec_name(expr: _ast.AST) -> str | None:
-                # dotted name if possible
+                # dotted name if possible; unwrap calls like validate_call(...)
+                if isinstance(expr, _ast.Call):
+                    return _dec_name(expr.func)
                 if isinstance(expr, _ast.Name):
                     return expr.id
                 if isinstance(expr, _ast.Attribute):
