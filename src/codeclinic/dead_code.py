@@ -831,6 +831,15 @@ def analyze_dead_code(
             if resolved in syms:
                 e.dst = resolved
 
+    # Rewrite class base references via alias chain so Protocol/Inheritance checks use canonical FQNs
+    for mi in modules.values():
+        for cls_local, bases in list((mi.bases or {}).items()):
+            resolved_list: List[str] = []
+            for b in bases or []:
+                rb = _resolve_with_tail(b)
+                resolved_list.append(rb)
+            mi.bases[cls_local] = resolved_list
+
     # Roots from top-level package __init__.py exports
     root_syms: Set[str] = set()
     for top_name, top_path in tops.items():
