@@ -590,6 +590,13 @@ def _parse_module(file_path: Path, module_fqn: str) -> ModuleInfo:
                     if isinstance(edges, list):
                         edges.append(Edge(src=src, dst=dst, type="alias", file=str(file_path), line=getattr(node, "lineno", 0) or 0))  # type: ignore
 
+    # Pre-collect top-level defs so that functions can resolve calls to later-defined siblings
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            mod.defs[node.name] = f"{module_fqn}.{node.name}"
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            mod.defs[node.name] = f"{module_fqn}.{getattr(node, 'name', '')}"
+
     # collect defs + edges
     defs: Dict[str, Sym] = {}
     edges: List[Edge] = []
@@ -668,10 +675,21 @@ def analyze_dead_code(
             hops += 1
         return cur
 
-    # Rewrite edge destinations through alias chain so they point to real defs when possible
+    def _resolve_with_tail(name: str) -> str:
+        parts = name.split(".")
+        # try longest head match in alias map and preserve tail
+        for i in range(len(parts), 0, -1):
+            head = ".".join(parts[:i])
+            tail = ".".join(parts[i:])
+            resolved_head = _resolve_alias_chain(head)
+            if resolved_head != head:
+                return resolved_head + ("." + tail if tail else "")
+        return _resolve_alias_chain(name)
+
+    # Rewrite edge destinations through alias chain, preserving method tails
     for e in edges:
-        if e.dst not in syms:
-            resolved = _resolve_alias_chain(e.dst)
+        if isinstance(e.dst, str) and e.dst not in syms:
+            resolved = _resolve_with_tail(e.dst)
             if resolved in syms:
                 e.dst = resolved
 
@@ -712,6 +730,13 @@ def analyze_dead_code(
     for e in edges:
         if e.dst in syms or (isinstance(e.dst, str) and e.dst):
             adj_typed.setdefault(e.src, []).append((e.type, e.dst))
+
+    # Constructor propagation: calling a Class implies using its __init__ if present
+    for s in list(syms.values()):
+        if s.kind == "class":
+            init_fqn = f"{s.fqn}.__init__"
+            if init_fqn in syms:
+                adj_typed.setdefault(s.fqn, []).append(("constructor", init_fqn))
 
     # Nominal protocol propagation: Port.m -> Impl.m
     if protocol_nominal:
@@ -819,6 +844,7 @@ def analyze_dead_code(
         "property",
         "return-escape",
         "descriptor",
+        "constructor",
     }
     NOMINAL = {"inherit-override", "protocol-impl"}
 
