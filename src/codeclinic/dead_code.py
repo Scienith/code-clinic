@@ -359,7 +359,26 @@ class _SymVisitor(ast.NodeVisitor):
         for st in getattr(node, "body", []) or []:
             if isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 self.inner_defs_in_cur_func.add(getattr(st, "name", ""))
-        self.generic_visit(node)
+        # Walk body for calls/aliases/returns with additional type-based fallbacks
+        for st in getattr(node, "body", []) or []:
+            # leverage generic visitor for nested handling
+            self.visit(st)
+        # Infer return types from simple `return ClassName(...)` patterns (PEP 604/Union 之外的补充)
+        try:
+            for st in getattr(node, "body", []) or []:
+                if isinstance(st, ast.Return):
+                    rv = getattr(st, "value", None)
+                    if isinstance(rv, ast.Call):
+                        n = self._name_of_expr(getattr(rv, "func", None))
+                        if n:
+                            tfqn = self._resolve_any(n) or n
+                            if isinstance(tfqn, str):
+                                self.fn_return_types.setdefault(fqn, [])
+                                if tfqn not in self.fn_return_types[fqn]:
+                                    self.fn_return_types[fqn].append(tfqn)
+                        # if func is Attribute like self.<field>.ctor, the above generic path suffices
+        except Exception:
+            pass
         # pop local alias scope
         _ = self.alias_stack.pop() if self.alias_stack else None
         # If this is __init__ of a class, infer simple `self.<attr> = <param>` types from annotations
@@ -506,6 +525,24 @@ class _SymVisitor(ast.NodeVisitor):
                 typ = node.args[1]
                 for r in self._names_in_type_tuple(typ):
                     self._add_edge(self._resolve_any(r), "isinstance", node)
+        # Fallback: self.<field>.method(...) → use learned field type to add direct call edge
+        try:
+            fn = getattr(node, "func", None)
+            if (
+                isinstance(fn, ast.Attribute)
+                and isinstance(getattr(fn, "value", None), ast.Attribute)
+                and isinstance(getattr(fn.value, "value", None), ast.Name)
+                and getattr(fn.value.value, "id", None) == "self"
+                and self.class_stack
+            ):
+                cls_fqn = self.class_stack[-1]
+                field = getattr(fn.value, "attr", "")
+                mname = getattr(fn, "attr", "")
+                tfqn = (self.attr_types_by_class.get(cls_fqn) or {}).get(field)
+                if tfqn and mname:
+                    self._add_edge(f"{tfqn}.{mname}", "call", node)
+        except Exception:
+            pass
         # record callable uses recursively (call + refs in args/keywords/containers)
         self._record_callable_uses(node)
         # decorators with args handled in _handle_func
