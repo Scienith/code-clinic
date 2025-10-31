@@ -274,6 +274,8 @@ class GatesSection:
     )
     # Typecheck: forbid Any usages via mypy disallow-any family
     typecheck_disallow_any: bool = False
+    # Exempt decorated functions from disallow_any_decorated when using these third-party decorators (by name or dotted suffix)
+    typecheck_any_decorated_exempt_decorators: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -693,6 +695,10 @@ def load_qa_config(path: str | Path) -> QAConfig:
         # typecheck.disallow_any -> enable mypy disallow-any flags
         if "disallow_any" in g_tc:
             cfg.gates.typecheck_disallow_any = bool(g_tc.get("disallow_any"))
+        # typecheck.exempt_decorators -> list of third-party decorator names/suffixes to exempt
+        exd = g_tc.get("exempt_decorators")
+        if isinstance(exd, list):
+            cfg.gates.typecheck_any_decorated_exempt_decorators = [str(x) for x in exd]
     except Exception:
         pass
 

@@ -792,6 +792,78 @@ def _run_mypy(cfg: QAConfig, logs_dir: Path) -> Tuple[str, str, Optional[int]]:
                 ]
         except Exception:
             pass
+        # Exempt decorated functions for specific third-party decorators by disabling disallow_any_decorated per module
+        # We approximate by scanning our source files for matching decorator names and generating per-module config
+        try:
+            ex_decs = list(getattr(cfg.gates, "typecheck_any_decorated_exempt_decorators", []) or [])
+        except Exception:
+            ex_decs = []
+        matched_modules: set[str] = set()
+        if ex_decs and bool(getattr(cfg.gates, "typecheck_disallow_any", False)):
+            files = _collect_py_files(cfg.tool.paths, cfg.tool.include, cfg.tool.exclude)
+            # helper to get module name from path under roots
+            roots = [Path(p) for p in cfg.tool.paths]
+            def mod_name_of(path: Path) -> str | None:
+                for r in roots:
+                    try:
+                        rel = path.relative_to(r)
+                    except Exception:
+                        continue
+                    parts = list(rel.parts)
+                    if not parts:
+                        return None
+                    if parts[-1] == "__init__.py":
+                        parts = parts[:-1]
+                    else:
+                        parts[-1] = Path(parts[-1]).stem
+                    return ".".join([p for p in parts if p])
+                return None
+            import ast as _ast
+            def _dec_name(expr: _ast.AST) -> str | None:
+                # dotted name if possible
+                if isinstance(expr, _ast.Name):
+                    return expr.id
+                if isinstance(expr, _ast.Attribute):
+                    parts = []
+                    cur = expr
+                    while isinstance(cur, _ast.Attribute):
+                        parts.append(cur.attr)
+                        cur = cur.value  # type: ignore
+                    if isinstance(cur, _ast.Name):
+                        parts.append(cur.id)
+                        return ".".join(reversed(parts))
+                return None
+            def _matches(dec: str, patterns: list[str]) -> bool:
+                for p in patterns:
+                    # match exact or dotted suffix
+                    if dec == p or dec.endswith("." + p):
+                        return True
+                return False
+            for f in files:
+                try:
+                    src = Path(f).read_text(encoding="utf-8", errors="ignore")
+                    tree = _ast.parse(src)
+                except Exception:
+                    continue
+                found = False
+                for n in [n for n in _ast.walk(tree) if isinstance(n, (_ast.FunctionDef, _ast.AsyncFunctionDef, _ast.ClassDef))]:
+                    for d in getattr(n, 'decorator_list', []) or []:
+                        dn = _dec_name(d)
+                        if dn and _matches(dn, ex_decs):
+                            found = True
+                            break
+                    if found:
+                        break
+                if found:
+                    mn = mod_name_of(Path(f))
+                    if mn:
+                        matched_modules.add(mn)
+        # Attach per-module disables for disallow_any_decorated
+        for mn in sorted(matched_modules):
+            lines += [
+                f"[mypy-{mn}]",
+                "disallow_any_decorated = False",
+            ]
         # Map tool.exclude to a robust mypy exclude regex (segment-based)
         try:
             ex_globs = list(getattr(cfg.tool, 'exclude', []) or [])
