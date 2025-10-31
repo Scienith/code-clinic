@@ -261,6 +261,8 @@ class _SymVisitor(ast.NodeVisitor):
         self.defs.setdefault(fqn, Sym(fqn=fqn, kind="class", file=str(self.mod.path), line=node.lineno))
         # Ensure per-class attribute type map exists
         self.attr_types_by_class.setdefault(fqn, {})
+        # into class scope (so inheritance edges originate from class)
+        self.class_stack.append(fqn)
         # inherit edges
         resolved_bases: List[str] = []
         for base in node.bases:
@@ -273,8 +275,6 @@ class _SymVisitor(ast.NodeVisitor):
                     resolved_bases.append(dst)
         # record resolved bases for nominal protocol checks
         self.mod.bases[getattr(node, "name", "")] = resolved_bases
-        # into class scope
-        self.class_stack.append(fqn)
         self.generic_visit(node)
         self.class_stack.pop()
 
