@@ -781,9 +781,13 @@ def _parse_module(file_path: Path, module_fqn: str) -> ModuleInfo:
             module = node.module or ""
             level = getattr(node, "level", 0) or 0
             if level > 0:
-                # compute absolute module relative to current module fqn
+                # relative import resolution: single dot (level==1) means current package
                 cur_parts = module_fqn.split(".")
-                base = cur_parts[:-level] if level <= len(cur_parts) else []
+                if level == 1:
+                    base = cur_parts
+                else:
+                    drop = level - 1
+                    base = cur_parts[:-drop] if drop <= len(cur_parts) else []
                 if module:
                     module = ".".join([*base, module])
                 else:
@@ -862,6 +866,11 @@ def analyze_dead_code(
     protocol_nominal: bool = False,
     protocol_strict_signature: bool = True,
 ) -> Tuple[Dict[str, Any], int]:
+    # Reset global maps for a fresh analysis
+    try:
+        GLOBAL_FN_RETURN_TYPES.clear()
+    except Exception:
+        pass
     roots_base = [Path(p) for p in paths]
     files = _collect_py_files(paths, include, exclude)
     tops = _find_top_packages(paths)
