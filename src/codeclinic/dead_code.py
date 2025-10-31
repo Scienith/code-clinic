@@ -53,6 +53,11 @@ class ModuleInfo:
     bases: Dict[str, List[str]] = field(default_factory=dict)  # class local name -> list of resolved base FQNs
 
 
+# Global registry of function/method return types across all parsed modules
+# Maps callee FQN -> list of return type FQNs (best-effort)
+GLOBAL_FN_RETURN_TYPES: Dict[str, List[str]] = {}
+
+
 def _collect_py_files(paths: List[str], include: List[str], exclude: List[str]) -> List[Path]:
     collected: List[Path] = []
     for root in paths:
@@ -505,7 +510,10 @@ class _SymVisitor(ast.NodeVisitor):
                 ref = self._name_of_expr(fn) if fn is not None else None
                 if ref:
                     callee_fqn = self._resolve_any(ref) or ref
+                    # Prefer local map; fallback to global map across modules
                     rts = getattr(self, "fn_return_types", {}).get(str(callee_fqn), [])
+                    if not rts:
+                        rts = GLOBAL_FN_RETURN_TYPES.get(str(callee_fqn), [])
                     target_type = next((t for t in rts if t and t not in {"None", "NoneType"}), None)
                     # Fallback: if callee is a class defined in current module, treat as constructor
                     if not target_type and isinstance(callee_fqn, str) and callee_fqn in self.defs and self.defs[callee_fqn].kind == "class":
@@ -615,6 +623,20 @@ class _SymVisitor(ast.NodeVisitor):
                         tfqn = (self.attr_types_by_class.get(cls_fqn) or {}).get(field)
                         if tfqn and mname:
                             self._add_edge(f"{tfqn}.{mname}", "call", expr)
+                    # Fallback for chained call: m1(...).m2() using return types of m1
+                    if isinstance(fn, ast.Attribute) and isinstance(getattr(fn, "value", None), ast.Call):
+                        base_call = fn.value
+                        base_ref = self._name_of_expr(getattr(base_call, "func", None))
+                        if base_ref:
+                            callee_fqn = self._resolve_any(base_ref) or base_ref
+                            # consult local and global return maps
+                            rts = getattr(self, "fn_return_types", {}).get(str(callee_fqn), [])
+                            if not rts:
+                                rts = GLOBAL_FN_RETURN_TYPES.get(str(callee_fqn), [])
+                            mname = getattr(fn, "attr", "")
+                            for t in rts:
+                                if t and t not in {"None", "NoneType"} and mname:
+                                    self._add_edge(f"{t}.{mname}", "call", expr)
                 # recurse into args/keywords
                 for a in list(getattr(expr, "args", []) or []):
                     self._record_callable_uses(a)
@@ -796,6 +818,20 @@ def _parse_module(file_path: Path, module_fqn: str) -> ModuleInfo:
     _sys.modules[__name__].__dict__["_tmp_edges_alias"] = []  # type: ignore
     vis = _SymVisitor(mod, defs, edges)
     vis.visit(tree)
+    # merge function return types into global registry
+    try:
+        local_rt = getattr(vis, "fn_return_types", {}) or {}
+        if isinstance(local_rt, dict):
+            for k, v in local_rt.items():
+                if not isinstance(k, str) or not isinstance(v, list):
+                    continue
+                cur = GLOBAL_FN_RETURN_TYPES.get(k, [])
+                for t in v:
+                    if t and t not in cur:
+                        cur.append(t)
+                GLOBAL_FN_RETURN_TYPES[k] = cur
+    except Exception:
+        pass
     # merge pre-collected alias edges
     try:
         pre_alias: List[Edge] = _sys.modules[__name__].__dict__.pop("_tmp_edges_alias", [])  # type: ignore
