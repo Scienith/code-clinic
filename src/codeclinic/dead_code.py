@@ -366,9 +366,13 @@ class _SymVisitor(ast.NodeVisitor):
         try:
             args = getattr(node, "args", None)
             if args is not None:
-                params = list(getattr(args, "args", []) or [])
-                start = 1 if kind == "method" and params else 0
-                for a in params[start:]:
+                pos = list(getattr(args, "args", []) or [])
+                kwonly = list(getattr(args, "kwonlyargs", []) or [])
+                params = pos + kwonly
+                start = 1 if kind == "method" and pos else 0
+                for idx, a in enumerate(params):
+                    if idx < start:
+                        continue
                     ann = getattr(a, "annotation", None)
                     if ann is not None:
                         tname = self._name_of_expr(ann)
@@ -417,8 +421,11 @@ class _SymVisitor(ast.NodeVisitor):
                 param_types: Dict[str, str] = {}
                 fn_args = getattr(node, "args", None)
                 if fn_args is not None:
-                    params = list(getattr(fn_args, "args", []) or [])
-                    for a in params[1:]:  # skip self
+                    pos = list(getattr(fn_args, "args", []) or [])
+                    kwonly = list(getattr(fn_args, "kwonlyargs", []) or [])
+                    # Skip first (self) only among positional
+                    params = pos[1:] + kwonly
+                    for a in params:
                         ann = getattr(a, "annotation", None)
                         if ann is not None:
                             tname = self._name_of_expr(ann)
