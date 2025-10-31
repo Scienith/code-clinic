@@ -175,6 +175,8 @@ class _SymVisitor(ast.NodeVisitor):
         self.inner_defs_in_cur_func: Set[str] = set()
         # Local alias stack for function scope imports
         self.alias_stack: List[Dict[str, str]] = []
+        # Learned attribute types per class: {class_fqn: {attr: type_fqn}}
+        self.attr_types_by_class: Dict[str, Dict[str, str]] = {}
 
     # --- helpers ---
     def _current_fqn(self) -> Optional[str]:
@@ -214,6 +216,18 @@ class _SymVisitor(ast.NodeVisitor):
         if isinstance(value, ast.Name) and value.id in {"self", "cls"} and self.class_stack:
             cls_fqn = self.class_stack[-1]
             return f"{cls_fqn}.{attr}"
+        # self.<field>.<member> where field type is inferred from __init__
+        if (
+            isinstance(value, ast.Attribute)
+            and isinstance(getattr(value, "value", None), ast.Name)
+            and getattr(value.value, "id", None) == "self"
+            and self.class_stack
+        ):
+            cls_fqn = self.class_stack[-1]
+            field = getattr(value, "attr", "")
+            tfqn = (self.attr_types_by_class.get(cls_fqn) or {}).get(field)
+            if tfqn:
+                return f"{tfqn}.{attr}"
         # mod.SYM or ClassName.attr within same module
         if isinstance(value, ast.Name):
             base = value.id
@@ -245,6 +259,8 @@ class _SymVisitor(ast.NodeVisitor):
         self.mod.defs[node.name] = fqn
         self.mod.classes.setdefault(node.name, set())
         self.defs.setdefault(fqn, Sym(fqn=fqn, kind="class", file=str(self.mod.path), line=node.lineno))
+        # Ensure per-class attribute type map exists
+        self.attr_types_by_class.setdefault(fqn, {})
         # inherit edges
         resolved_bases: List[str] = []
         for base in node.bases:
@@ -325,6 +341,39 @@ class _SymVisitor(ast.NodeVisitor):
         self.generic_visit(node)
         # pop local alias scope
         _ = self.alias_stack.pop() if self.alias_stack else None
+        # If this is __init__ of a class, infer simple `self.<attr> = <param>` types from annotations
+        try:
+            if kind == "method" and name == "__init__" and self.class_stack:
+                cls_fqn = self.class_stack[-1]
+                # map parameter name -> annotated type FQN
+                param_types: Dict[str, str] = {}
+                fn_args = getattr(node, "args", None)
+                if fn_args is not None:
+                    params = list(getattr(fn_args, "args", []) or [])
+                    for a in params[1:]:  # skip self
+                        ann = getattr(a, "annotation", None)
+                        if ann is not None:
+                            tname = self._name_of_expr(ann)
+                            if tname:
+                                tfqn = self._resolve_any(tname) or tname
+                                pname = getattr(a, "arg", "")
+                                if pname:
+                                    param_types[pname] = str(tfqn)
+                for st in list(getattr(node, "body", []) or []):
+                    if isinstance(st, ast.Assign):
+                        val = getattr(st, "value", None)
+                        if isinstance(val, ast.Name) and val.id in param_types:
+                            for tgt in getattr(st, "targets", []) or []:
+                                if (
+                                    isinstance(tgt, ast.Attribute)
+                                    and isinstance(getattr(tgt, "value", None), ast.Name)
+                                    and getattr(tgt.value, "id", None) == "self"
+                                ):
+                                    attrn = getattr(tgt, "attr", "")
+                                    if attrn:
+                                        self.attr_types_by_class.setdefault(cls_fqn, {})[attrn] = param_types[val.id]
+        except Exception:
+            pass
         self.func_stack.pop()
 
     def visit_Import(self, node: ast.Import) -> None:
