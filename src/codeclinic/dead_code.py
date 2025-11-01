@@ -1812,18 +1812,104 @@ def analyze_dead_code(
                     if fqn.endswith("." + w) or fqn.split(".")[-1] == w:
                         root_syms.add(fqn)
 
-    # Build adjacency with typed edges
-    adj_typed: Dict[str, List[Tuple[str, str]]] = {}
-    for e in edges:
-        if e.dst in syms or (isinstance(e.dst, str) and e.dst):
-            adj_typed.setdefault(e.src, []).append((e.type, e.dst))
+    # Alias fusion (quotient graph) stage: merge alias-equivalent symbols into representative nodes
+    try:
+        # Union-Find helpers
+        parent: Dict[str, str] = {}
+        rank: Dict[str, int] = {}
+        def _find(x: str) -> str:
+            if x not in parent:
+                parent[x] = x
+                rank[x] = 0
+            if parent[x] != x:
+                parent[x] = _find(parent[x])
+            return parent[x]
+        def _union(a: str, b: str) -> None:
+            if a not in syms or b not in syms:
+                return
+            ra, rb = _find(a), _find(b)
+            if ra == rb:
+                return
+            if rank[ra] < rank[rb]:
+                parent[ra] = rb
+            elif rank[ra] > rank[rb]:
+                parent[rb] = ra
+            else:
+                parent[rb] = ra
+                rank[ra] += 1
+        # Seed union from alias edges and global alias map
+        for e in edges:
+            if e.type == "alias" and isinstance(e.src, str) and isinstance(e.dst, str):
+                if e.src in syms and e.dst in syms:
+                    _union(e.src, e.dst)
+        for agg, impl in list(alias_global.items()):
+            if agg in syms and impl in syms:
+                _union(agg, impl)
+        # Method-level union based on class fusion: group methods by (rep(class), method name) and union
+        class_rep: Dict[str, str] = {}
+        for s in syms.values():
+            if s.kind == "class":
+                class_rep[s.fqn] = _find(s.fqn)
+        # Build map: (rep_cls, mname) -> list of method FQNs
+        methods_by_rep_and_name: Dict[Tuple[str, str], List[str]] = {}
+        for s in syms.values():
+            if s.kind == "method":
+                parts = s.fqn.split(".")
+                if len(parts) >= 2:
+                    cls = ".".join(parts[:-1])
+                    m = parts[-1]
+                    rcls = class_rep.get(cls)
+                    if rcls:
+                        methods_by_rep_and_name.setdefault((rcls, m), []).append(s.fqn)
+        for (_rcls, _m), fqn_list in methods_by_rep_and_name.items():
+            if len(fqn_list) >= 2:
+                base = fqn_list[0]
+                for other in fqn_list[1:]:
+                    _union(base, other)
+        # Build representative map and members
+        rep_map: Dict[str, str] = {}
+        members_by_rep: Dict[str, Set[str]] = {}
+        for fqn in syms.keys():
+            r = _find(fqn) if fqn in parent else fqn
+            rep_map[fqn] = r
+            members_by_rep.setdefault(r, set()).add(fqn)
+        # Rebuild edges on quotient graph
+        edges_fused: List[Edge] = []
+        for e in edges:
+            s = rep_map.get(e.src, e.src)
+            d = rep_map.get(e.dst, e.dst) if isinstance(e.dst, str) else e.dst
+            if isinstance(d, str) and not d:
+                continue
+            edges_fused.append(Edge(src=s, dst=d, type=e.type, file=e.file, line=e.line))
+        # Build adjacency with typed edges from fused edges
+        adj_typed: Dict[str, List[Tuple[str, str]]] = {}
+        for e in edges_fused:
+            if e.dst in syms or (isinstance(e.dst, str) and e.dst):
+                adj_typed.setdefault(e.src, []).append((e.type, e.dst))
+        # Canonicalize root symbols and expand to fused reps' members as alive seeds later
+        try:
+            root_syms = {rep_map.get(r, r) for r in root_syms}
+        except Exception:
+            pass
+    except Exception:
+        # Fallback to non-fused adjacency
+        adj_typed = {}
+        for e in edges:
+            if e.dst in syms or (isinstance(e.dst, str) and e.dst):
+                adj_typed.setdefault(e.src, []).append((e.type, e.dst))
 
     # Constructor propagation: calling a Class implies using its __init__ if present
     for s in list(syms.values()):
         if s.kind == "class":
             init_fqn = f"{s.fqn}.__init__"
             if init_fqn in syms:
-                adj_typed.setdefault(s.fqn, []).append(("constructor", init_fqn))
+                # use representative class node if fused
+                try:
+                    s_cls = rep_map.get(s.fqn, s.fqn)
+                    i_m = rep_map.get(init_fqn, init_fqn)
+                    adj_typed.setdefault(s_cls, []).append(("constructor", i_m))
+                except Exception:
+                    adj_typed.setdefault(s.fqn, []).append(("constructor", init_fqn))
 
     # Identify classes that are directly "used" via direct usage edges (constructors/value-flow/etc.)
     DIRECT_FOR_USED = {
@@ -1842,7 +1928,9 @@ def analyze_dead_code(
     if GLOBAL_COUNT_MODULE_BINDINGS:
         DIRECT_FOR_USED.add("binding-use")
     used_classes: Set[str] = set()
-    for e in edges:
+    # use fused edges if available
+    _edges_for_used = locals().get("edges_fused", edges)
+    for e in _edges_for_used:
         if e.type in DIRECT_FOR_USED or (GLOBAL_INCLUDE_ANNOTATIONS and e.type == "annotation"):
             # direct hit: edge targets a class symbol
             if e.dst in syms and syms[e.dst].kind == "class":
@@ -2250,6 +2338,18 @@ def analyze_dead_code(
 
     # Dead = all symbols (incl. alias-only) minus alive, after exclusions
     alive = reachable | policy | root_syms
+    # Canonicalize alive through alias chain so dead computation uses implementation FQNs
+    try:
+        canon_alive: Set[str] = set()
+        for a in list(alive):
+            if a in syms:
+                canon_alive.add(a)
+                continue
+            ra = _resolve_with_tail(a)
+            canon_alive.add(ra if ra in syms else a)
+        alive = canon_alive
+    except Exception:
+        pass
     all_fqns = set(syms.keys())
     # Exclude protocol methods if configured
     if ignore_protocol_methods:
@@ -2337,9 +2437,52 @@ def analyze_dead_code(
                     comp_methods = {f"{c}.{m}" for c in comp}
                     if used_methods & comp_methods:
                         newly_used |= comp_methods
-            # Apply closure
+            # Apply closure and recompute dead with the same exclusions
             alive |= newly_used
+            # Canonicalize alive again after closure
+            try:
+                canon_alive2: Set[str] = set()
+                for a in list(alive):
+                    if a in syms:
+                        canon_alive2.add(a)
+                        continue
+                    ra = _resolve_with_tail(a)
+                    canon_alive2.add(ra if ra in syms else a)
+                alive = canon_alive2
+            except Exception:
+                pass
             all_fqns = set(syms.keys())
+            # Re-apply protocol methods exclusion if configured
+            if ignore_protocol_methods:
+                try:
+                    prot_set: Set[str] = set(
+                        e.src for e in edges if e.type == "inherit" and isinstance(e.dst, str) and (
+                            e.dst == "typing.Protocol" or str(e.dst).endswith(".Protocol")
+                        )
+                    )
+                    to_exclude: Set[str] = set()
+                    for fqn, s in syms.items():
+                        if s.kind != "method":
+                            continue
+                        cls = ".".join(fqn.split(".")[:-1])
+                        if cls in prot_set:
+                            to_exclude.add(fqn)
+                    all_fqns -= to_exclude
+                except Exception:
+                    pass
+            # Re-apply node exclude globs on FQN or file path
+            if exclude_node_globs:
+                try:
+                    pats = list(exclude_node_globs or [])
+                    drop: Set[str] = set()
+                    for fqn, s in syms.items():
+                        name_ok = any(fnmatch.fnmatch(fqn, p) for p in pats)
+                        file_ok = any(fnmatch.fnmatch(s.file, p) for p in pats)
+                        if name_ok or file_ok:
+                            drop.add(fqn)
+                    all_fqns -= drop
+                except Exception:
+                    pass
             dead = sorted([s for s in all_fqns if s not in alive])
         except Exception:
             pass
