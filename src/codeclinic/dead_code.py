@@ -730,6 +730,19 @@ class _SymVisitor(ast.NodeVisitor):
                 tfqn = (self.var_types_stack[-1] or {}).get(vname)
                 if tfqn and mname:
                     self._add_edge(f"{tfqn}.{mname}", "call", node)
+            # Fallback for var.__class__.method(...) using inferred var type
+            if (
+                isinstance(fn, ast.Attribute)
+                and isinstance(getattr(fn, "value", None), ast.Attribute)
+                and isinstance(getattr(fn.value, "value", None), ast.Name)
+                and getattr(fn.value, "attr", "") == "__class__"
+                and self.var_types_stack
+            ):
+                vname = getattr(fn.value.value, "id", "")
+                mname = getattr(fn, "attr", "")
+                tfqn = (self.var_types_stack[-1] or {}).get(vname)
+                if tfqn and mname:
+                    self._add_edge(f"{tfqn}.{mname}", "call", node)
         except Exception:
             pass
         # record callable uses recursively (call + refs in args/keywords/containers)
@@ -894,6 +907,19 @@ class _SymVisitor(ast.NodeVisitor):
                         tfqn = (self.var_types_stack[-1] or {}).get(vname)
                         if tfqn and mname:
                             self._add_edge(f"{tfqn}.{mname}", "call", expr)
+                    # Fallback for var.__class__.method(...) where var type is inferred
+                    if (
+                        isinstance(fn, ast.Attribute)
+                        and isinstance(getattr(fn, "value", None), ast.Attribute)
+                        and isinstance(getattr(fn.value, "value", None), ast.Name)
+                        and getattr(fn.value, "attr", "") == "__class__"
+                        and self.var_types_stack
+                    ):
+                        vname = getattr(fn.value.value, "id", "")
+                        mname = getattr(fn, "attr", "")
+                        tfqn = (self.var_types_stack[-1] or {}).get(vname)
+                        if tfqn and mname:
+                            self._add_edge(f"{tfqn}.{mname}", "call", expr)
                     # Fallback for chained call: m1(...).m2() using return types of m1
                     if isinstance(fn, ast.Attribute) and isinstance(getattr(fn, "value", None), ast.Call):
                         base_call = fn.value
@@ -1011,8 +1037,11 @@ class _SymVisitor(ast.NodeVisitor):
                     for it in items:
                         out.extend(self._type_names_from_annotation(it))
                 else:
+                    # General generics: include both the base and inner parameter types
                     if base:
                         out.append(base)
+                    for it in items:
+                        out.extend(self._type_names_from_annotation(it))
             elif hasattr(ast, "BinOp") and isinstance(ann, ast.BinOp) and isinstance(getattr(ann, "op", None), ast.BitOr):
                 out.extend(self._type_names_from_annotation(getattr(ann, "left", None)))
                 out.extend(self._type_names_from_annotation(getattr(ann, "right", None)))
@@ -1020,8 +1049,14 @@ class _SymVisitor(ast.NodeVisitor):
                 if ann.value is None:
                     out.append("None")
                 elif isinstance(ann.value, str) and ann.value.strip():
-                    # Forward-referenced annotation like "ExecContext"
-                    out.append(str(ann.value).strip())
+                    # Forward-referenced annotation like "ExecContext" or "tuple[Mapping[str, NodeLike], ...]"
+                    s = str(ann.value).strip()
+                    try:
+                        expr = ast.parse(s, mode="eval").body  # type: ignore[attr-defined]
+                        out.extend(self._type_names_from_annotation(expr))
+                    except Exception:
+                        # Fallback: treat as a single name
+                        out.append(s)
         except Exception:
             pass
         return out
@@ -1054,19 +1089,17 @@ def _parse_module(file_path: Path, module_fqn: str) -> ModuleInfo:
                         edges.append(Edge(src=src, dst=dst, type="alias", file=str(file_path), line=getattr(node, "lineno", 0) or 0))  # type: ignore
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
-            level = getattr(node, "level", 0) or 0
+            level = int(getattr(node, "level", 0) or 0)
             if level > 0:
-                # relative import resolution: single dot (level==1) means current package
+                # Relative import resolution:
+                #   level=1 → from .x import y   => resolve relative to current package (drop 1 segment)
+                #   level=2 → from ..x import y  => drop 2 segments, etc.
                 cur_parts = module_fqn.split(".")
-                if level == 1:
-                    base = cur_parts
-                else:
-                    drop = level - 1
-                    base = cur_parts[:-drop] if drop <= len(cur_parts) else []
+                base_parts = cur_parts[:-level] if level <= len(cur_parts) else []
                 if module:
-                    module = ".".join([*base, module])
+                    module = ".".join([*base_parts, module])
                 else:
-                    module = ".".join(base)
+                    module = ".".join(base_parts)
             for alias in node.names:
                 if alias.name == "*":
                     continue
@@ -1446,6 +1479,15 @@ def analyze_dead_code(
         for fqn in syms:
             if fqn.startswith(prefix):
                 policy.add(fqn)
+
+    # Additionally, enable annotation edges to count when they originate from kept class bodies:
+    # If policy keeps an exported/whitelisted class body, annotations inside those methods should credit their types.
+    # Seed reachability from policy nodes as well to traverse any annotation/value-flow edges they emit.
+    try:
+        reachable_policy = _reachable_via_pattern(policy)
+        reachable |= reachable_policy
+    except Exception:
+        pass
 
     alive = reachable | policy | root_syms
     dead = [s for s in syms if s not in alive]
