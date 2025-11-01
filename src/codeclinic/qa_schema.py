@@ -119,6 +119,15 @@ def validate_qa_yaml(data: dict) -> None:
                 exclude_globs: list[str] = Field(default_factory=list)
                 protocol_nominal: Optional[bool] = None
                 protocol_strict_signature: Optional[bool] = None
+                # New fields
+                value_flow_on_assign: Optional[bool] = None
+                count_module_bindings: Optional[bool] = None
+                # Preferred new key: root_paths. Back-compat: extra_paths
+                root_paths: Optional[list[str]] = None
+                extra_paths: Optional[list[str]] = None
+                ignore_protocol_methods: Optional[bool] = None
+                exclude_node_globs: Optional[list[str]] = None
+                inherit_method_closure: Optional[bool] = None
 
             class VisualsModel(BaseModel):
                 model_config = ConfigDict(extra="allow")
@@ -382,6 +391,14 @@ def validate_qa_yaml(data: dict) -> None:
                 exclude_globs: List[str] = Field(default_factory=list)
                 protocol_nominal: Optional[bool] = None
                 protocol_strict_signature: Optional[bool] = None
+                # New fields
+                value_flow_on_assign: Optional[bool] = None
+                count_module_bindings: Optional[bool] = None
+                root_paths: Optional[List[str]] = None
+                extra_paths: Optional[List[str]] = None
+                ignore_protocol_methods: Optional[bool] = None
+                exclude_node_globs: Optional[List[str]] = None
+                inherit_method_closure: Optional[bool] = None
 
             class VisualsModel(BaseModel):
                 class Config:

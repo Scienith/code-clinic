@@ -298,13 +298,16 @@ def qa_run(
         try:
             from .dead_code import explain_usage_path
 
+            # Use same root analysis entries for explain
+            dc_paths = list(cfg.tool.paths or []) + list(getattr(cfg.gates, "dead_code_root_paths", []) or [])
             exp = explain_usage_path(
-                paths=cfg.tool.paths,
+                paths=dc_paths,
                 include=cfg.tool.include,
                 exclude=list(cfg.tool.exclude or []),
                 target_fqn=explain_fqn,
                 allow_module_export_closure=bool(getattr(cfg.gates, "dead_code_allow_module_export_closure", False)),
                 whitelist_roots=list(getattr(cfg.gates, "dead_code_whitelist", []) or []),
+                priority_paths=list(getattr(cfg.gates, "dead_code_root_paths", []) or []),
             )
             # Write artifact
             dc_dir = artifacts_dir / "dead_code"
@@ -1785,8 +1788,10 @@ def _ext_dead_code(cfg: QAConfig, artifacts_dir: Path) -> tuple[int, Optional[Pa
     except Exception:
         pass
     out_dir = artifacts_dir / "dead_code"
+    # Compose analysis paths: tool.paths + optional root_paths with higher priority than exclude
+    dc_paths = list(cfg.tool.paths or []) + list(getattr(cfg.gates, "dead_code_root_paths", []) or [])
     count, report = save_dead_code_report(
-        paths=cfg.tool.paths,
+        paths=dc_paths,
         include=cfg.tool.include,
         exclude=exclude,
         output_dir=out_dir,
@@ -1800,6 +1805,13 @@ def _ext_dead_code(cfg: QAConfig, artifacts_dir: Path) -> tuple[int, Optional[Pa
         # Always enable nominal Protocol propagation with strict signature matching
         protocol_nominal=True,
         protocol_strict_signature=True,
+        value_flow_on_assign=bool(getattr(cfg.gates, "dead_code_value_flow_on_assign", True)),
+        count_module_bindings=bool(getattr(cfg.gates, "dead_code_count_module_bindings", False)),
+        priority_paths=list(getattr(cfg.gates, "dead_code_root_paths", []) or []),
+        root_paths=list(getattr(cfg.gates, "dead_code_root_paths", []) or []),
+        ignore_protocol_methods=bool(getattr(cfg.gates, "dead_code_ignore_protocol_methods", False)),
+        exclude_node_globs=list(getattr(cfg.gates, "dead_code_exclude_node_globs", []) or []),
+        inherit_method_closure=bool(getattr(cfg.gates, "dead_code_inherit_method_closure", False)),
     )
     return count, report
 

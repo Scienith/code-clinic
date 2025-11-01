@@ -267,6 +267,18 @@ class GatesSection:
     dead_code_exclude_globs: List[str] = field(default_factory=list)
     dead_code_protocol_nominal: bool = False
     dead_code_protocol_strict_signature: bool = True
+    # New: treat assignment (with inferred return type) as value-flow usage
+    dead_code_value_flow_on_assign: bool = True
+    # New: count module-level bindings (imports/assigns) as nodes and track their usage
+    dead_code_count_module_bindings: bool = False
+    # New: root analysis entries (override exclude, and seed traversal roots from their usages)
+    dead_code_root_paths: List[str] = field(default_factory=list)
+    # New: ignore Protocol methods in dead count (keep class def semantics only)
+    dead_code_ignore_protocol_methods: bool = False
+    # New: exclude nodes from dead counting by glob (FQN or file path best-effort)
+    dead_code_exclude_node_globs: List[str] = field(default_factory=list)
+    # New: method-name closure across inheritance/protocol chains
+    dead_code_inherit_method_closure: bool = False
     # 禁止 lambda 函数（可行内注释豁免）
     forbid_lambda: bool = False
     lambda_allow_comment_tags: List[str] = field(
@@ -912,6 +924,25 @@ def load_qa_config(path: str | Path) -> QAConfig:
             cfg.gates.dead_code_protocol_nominal = bool(g_dc.get("protocol_nominal"))
         if "protocol_strict_signature" in g_dc:
             cfg.gates.dead_code_protocol_strict_signature = bool(g_dc.get("protocol_strict_signature"))
+        if "value_flow_on_assign" in g_dc:
+            cfg.gates.dead_code_value_flow_on_assign = bool(g_dc.get("value_flow_on_assign"))
+        if "count_module_bindings" in g_dc:
+            cfg.gates.dead_code_count_module_bindings = bool(g_dc.get("count_module_bindings"))
+        # Accept both root_paths (preferred) and extra_paths (back-compat)
+        rp = g_dc.get("root_paths", None)
+        if isinstance(rp, list):
+            cfg.gates.dead_code_root_paths = [str(x) for x in rp]
+        else:
+            xp = g_dc.get("extra_paths", None)
+            if isinstance(xp, list):
+                cfg.gates.dead_code_root_paths = [str(x) for x in xp]
+        if "ignore_protocol_methods" in g_dc:
+            cfg.gates.dead_code_ignore_protocol_methods = bool(g_dc.get("ignore_protocol_methods"))
+        exn = g_dc.get("exclude_node_globs", None)
+        if isinstance(exn, list):
+            cfg.gates.dead_code_exclude_node_globs = [str(x) for x in exn]
+        if "inherit_method_closure" in g_dc:
+            cfg.gates.dead_code_inherit_method_closure = bool(g_dc.get("inherit_method_closure"))
     except Exception:
         pass
 

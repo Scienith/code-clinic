@@ -166,6 +166,14 @@ gates:
     allow_module_export_closure: false  # 允许导出模块触发“顶层闭包保留”
     whitelist: []  # 额外的根 FQN 名称列表
     exclude_globs: ["**/tests/**", "**/migrations/**"]
+    # 赋值即值流：当 v = callee(...) 且返回类型可推断时，记为对该类型的使用
+    value_flow_on_assign: true
+    # 统计模块级绑定（import/赋值）为节点，并追踪其被引用（binding-use）
+    count_module_bindings: false
+    # 额外“根入口”路径（高优先级，覆盖 exclude），这些文件/目录中“被使用到的符号”会作为遍历起点：
+    # 示例：
+    # root_paths: ["src/scientith_dag_system/__init__.py", "src/scientith_dag_system/tests"]
+    root_paths: []
 
   # 模块命名测试存在性
   tests_presence:

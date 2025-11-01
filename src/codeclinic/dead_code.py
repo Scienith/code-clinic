@@ -51,21 +51,57 @@ class ModuleInfo:
     classes: Dict[str, Set[str]] = field(default_factory=dict)  # class name -> set(method FQNs)
     alias: Dict[str, str] = field(default_factory=dict)  # local alias -> target FQN or module
     bases: Dict[str, List[str]] = field(default_factory=dict)  # class local name -> list of resolved base FQNs
+    module_bindings: Set[str] = field(default_factory=set)
+    # Registry candidates discovered in this module: list of (registry ref, [candidate class refs])
+    registry_candidates: List[Tuple[str, List[str]]] = field(default_factory=list)
 
 
 # Global registry of function/method return types across all parsed modules
 # Maps callee FQN -> list of return type FQNs (best-effort)
 GLOBAL_FN_RETURN_TYPES: Dict[str, List[str]] = {}
+# Structured tuple return element types: callee FQN -> list of element type name lists
+GLOBAL_FN_RETURN_TUPLE_ELEMS: Dict[str, List[List[str]]] = {}
 # Global toggle: treat type annotations as usage (adds 'annotation' edges and makes them count in traversal)
 GLOBAL_INCLUDE_ANNOTATIONS: bool = False
+GLOBAL_VALUE_FLOW_ON_ASSIGN: bool = True
+GLOBAL_COUNT_MODULE_BINDINGS: bool = False
 
 
-def _collect_py_files(paths: List[str], include: List[str], exclude: List[str]) -> List[Path]:
+def _collect_py_files(paths: List[str], include: List[str], exclude: List[str], priority_paths: Optional[List[str]] = None) -> List[Path]:
     collected: List[Path] = []
+    prio_set: Set[Path] = set()
+    try:
+        for p in (priority_paths or []):
+            prio_set.add(Path(p).resolve())
+    except Exception:
+        prio_set = set()
     for root in paths:
         base = Path(root)
         if not base.exists():
             continue
+        # Whether this root is marked as priority (exclude rules bypassed)
+        prio_root = False
+        try:
+            pr = base.resolve()
+            prio_root = any(str(pr).startswith(str(pp)) for pp in prio_set)
+        except Exception:
+            prio_root = False
+        # If user passed a single file as a root, handle it directly
+        if base.is_file():
+            try:
+                path_str = str(base)
+                rel_str = base.name
+                if (not prio_root) and any(fnmatch.fnmatch(path_str, pat) or fnmatch.fnmatch(rel_str, pat) for pat in exclude):
+                    continue
+                if include:
+                    ok = any(fnmatch.fnmatch(path_str, pat) or fnmatch.fnmatch(rel_str, pat) for pat in include)
+                    if not ok and not rel_str.endswith(".py"):
+                        continue
+                if rel_str.endswith(".py"):
+                    collected.append(base)
+                continue
+            except Exception:
+                pass
         for dirpath, dirnames, filenames in os.walk(base):
             # prune excluded dirs
             dir_rel_list = list(dirnames)
@@ -75,7 +111,7 @@ def _collect_py_files(paths: List[str], include: List[str], exclude: List[str]) 
                     rel = str(d_path.relative_to(base))
                 except Exception:
                     rel = str(d_path)
-                if any(fnmatch.fnmatch(rel, pat) for pat in exclude):
+                if (not prio_root) and any(fnmatch.fnmatch(rel, pat) for pat in exclude):
                     dirnames.remove(d)
             for fn in filenames:
                 if not fn.endswith(".py"):
@@ -85,7 +121,7 @@ def _collect_py_files(paths: List[str], include: List[str], exclude: List[str]) 
                     rel = str(f_path.relative_to(base))
                 except Exception:
                     rel = str(f_path)
-                if any(fnmatch.fnmatch(rel, pat) for pat in exclude):
+                if (not prio_root) and any(fnmatch.fnmatch(rel, pat) for pat in exclude):
                     continue
                 if include and not any(fnmatch.fnmatch(rel, pat) for pat in include):
                     # Heuristic: if include targets Python files (e.g., **/*.py), still accept .py at top-level
@@ -119,10 +155,20 @@ def _find_top_packages(paths: List[str]) -> Dict[str, Path]:
         base = Path(root)
         if not base.exists():
             continue
-        for child in base.iterdir():
-            if child.is_dir() and (child / "__init__.py").exists():
-                pkg = child.name
-                tops[pkg] = child
+        # If a file is passed (e.g., src/pkg/__init__.py), treat its parent directory as the top package
+        try:
+            if base.is_file() and base.name == "__init__.py":
+                pkg_dir = base.parent
+                if (pkg_dir / "__init__.py").exists():
+                    tops[pkg_dir.name] = pkg_dir
+                continue
+        except Exception:
+            pass
+        if base.is_dir():
+            for child in base.iterdir():
+                if child.is_dir() and (child / "__init__.py").exists():
+                    pkg = child.name
+                    tops[pkg] = child
     return tops
 
 
@@ -188,6 +234,8 @@ class _SymVisitor(ast.NodeVisitor):
         self.attr_elem_types_by_class: Dict[str, Dict[str, str]] = {}
         # Function-scope variable types (from param annotations/returns)
         self.var_types_stack: List[Dict[str, str]] = []
+        # Optional: map/dict value type per variable (e.g., Mapping[K,V] -> V)
+        self.var_map_value_types_stack: List[Dict[str, str]] = []
         # Function-scope variable element types for containers
         self.var_elem_types_stack: List[Dict[str, str]] = []
 
@@ -205,6 +253,18 @@ class _SymVisitor(ast.NodeVisitor):
         src_fqn = self._current_fqn()
         if not src_fqn:
             return
+        # Expand super().method placeholder to each base class method
+        try:
+            if isinstance(dst_fqn, str) and dst_fqn.startswith("__SUPER__.") and self.class_stack:
+                mname = dst_fqn.split(".", 1)[1]
+                cur_local = self.class_stack[-1].split(".")[-1]
+                for b in self.mod.bases.get(cur_local, []) or []:
+                    self.edges.append(
+                        Edge(src=src_fqn, dst=f"{b}.{mname}", type=etype, file=str(self.mod.path), line=getattr(node, "lineno", 0) or 0)
+                    )
+                return
+        except Exception:
+            pass
         self.edges.append(
             Edge(src=src_fqn, dst=dst_fqn, type=etype, file=str(self.mod.path), line=getattr(node, "lineno", 0) or 0)
         )
@@ -226,9 +286,15 @@ class _SymVisitor(ast.NodeVisitor):
 
     def _resolve_attr(self, value: ast.AST, attr: str) -> Optional[str]:
         # self.attr / cls.attr — handle before generic Name case
-        if isinstance(value, ast.Name) and value.id in {"self", "cls"} and self.class_stack:
-            cls_fqn = self.class_stack[-1]
-            return f"{cls_fqn}.{attr}"
+        if isinstance(value, ast.Name) and self.class_stack:
+            # Prefer inferred local variable type for a name 'cls' if present (to avoid shadowing issues)
+            if value.id == "cls" and self.var_types_stack:
+                v = (self.var_types_stack[-1] or {}).get("cls")
+                if v:
+                    return f"{v}.{attr}"
+            if value.id in {"self", "cls"}:
+                cls_fqn = self.class_stack[-1]
+                return f"{cls_fqn}.{attr}"
         # self.<field>.<member> where field type is inferred from __init__
         if (
             isinstance(value, ast.Attribute)
@@ -308,6 +374,17 @@ class _SymVisitor(ast.NodeVisitor):
             fqn = _sym_fqn(self.mod.fqn, name)
             kind = "function"
         self.mod.defs[name] = fqn
+        # If this function is nested inside another function/method, register a containment edge
+        try:
+            if self.func_stack:
+                # current function before pushing this one is the parent
+                parent_fqn = self.func_stack[-1]
+                if parent_fqn and parent_fqn != fqn:
+                    self.edges.append(
+                        Edge(src=parent_fqn, dst=fqn, type="inner-def", file=str(self.mod.path), line=getattr(node, "lineno", 0) or 0)
+                    )
+        except Exception:
+            pass
         # compute simple arity (positional args), drop self/cls for methods
         arity = -1
         try:
@@ -331,6 +408,14 @@ class _SymVisitor(ast.NodeVisitor):
                 arity=arity,
             ),
         )
+        # For methods, add a member-of edge to owning class so that using the method credits the class as used
+        try:
+            if kind == "method" and self.class_stack:
+                self.edges.append(
+                    Edge(src=fqn, dst=self.class_stack[-1], type="member-of", file=str(self.mod.path), line=getattr(node, "lineno", 0) or 0)
+                )
+        except Exception:
+            pass
 
         # record return type annotation (best-effort)
         try:
@@ -350,13 +435,43 @@ class _SymVisitor(ast.NodeVisitor):
                     if not hasattr(self, "fn_return_types"):
                         self.fn_return_types = {}
                     self.fn_return_types[fqn] = types
-                    # Optionally, count return annotation as usage
-                    try:
-                        if GLOBAL_INCLUDE_ANNOTATIONS:
-                            for t in types:
-                                self._add_edge(t, "annotation", node)
-                    except Exception:
-                        pass
+                # Structured tuple element extraction (for unpack inference)
+                try:
+                    def _tuple_elems(ann_ast: ast.AST) -> List[List[str]]:
+                        out_elems: List[List[str]] = []
+                        if isinstance(ann_ast, ast.Subscript):
+                            base = self._name_of_expr(getattr(ann_ast, "value", None))
+                            if base and base.split(".")[-1] in {"tuple", "Tuple"}:
+                                sl = getattr(ann_ast, "slice", None)
+                                items: List[ast.AST] = []
+                                if isinstance(sl, ast.Tuple):
+                                    items = list(sl.elts)
+                                elif sl is not None:
+                                    items = [sl]
+                                for it in items:
+                                    out_elems.append(self._type_names_from_annotation(it))
+                        elif isinstance(ann_ast, ast.Constant) and isinstance(getattr(ann_ast, "value", None), str):
+                            s = str(getattr(ann_ast, "value", "")).strip()
+                            try:
+                                expr = ast.parse(s, mode="eval").body  # type: ignore[attr-defined]
+                                return _tuple_elems(expr) or []
+                            except Exception:
+                                return []
+                        return out_elems
+                    elems = _tuple_elems(ann)
+                    if elems:
+                        if not hasattr(self, "fn_return_tuple_elems"):
+                            self.fn_return_tuple_elems = {}
+                        self.fn_return_tuple_elems[fqn] = elems
+                except Exception:
+                    pass
+                # Optionally, count return annotation as usage
+                try:
+                    if GLOBAL_INCLUDE_ANNOTATIONS:
+                        for t in types:
+                            self._add_edge(t, "annotation", node)
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -423,6 +538,7 @@ class _SymVisitor(ast.NodeVisitor):
         except Exception:
             pass
         self.var_types_stack.append(vtypes)
+        self.var_map_value_types_stack.append({})
         self.var_elem_types_stack.append(velem)
         # track inner defs in this function for return-escape
         self.inner_defs_in_cur_func = set()
@@ -470,6 +586,7 @@ class _SymVisitor(ast.NodeVisitor):
         _ = self.alias_stack.pop() if self.alias_stack else None
         # pop local var types scope
         _ = self.var_types_stack.pop() if self.var_types_stack else None
+        _ = self.var_map_value_types_stack.pop() if self.var_map_value_types_stack else None
         _ = self.var_elem_types_stack.pop() if self.var_elem_types_stack else None
         # If this is __init__ of a class, infer simple `self.<attr> = <param>` types from annotations
         try:
@@ -546,12 +663,7 @@ class _SymVisitor(ast.NodeVisitor):
         # Resolve relative import to absolute within module fqn
         if level > 0:
             cur_parts = self.mod.fqn.split(".")
-            if level == 1:
-                # Single dot means "current package"; for __init__.py this is the package itself
-                base_parts = cur_parts
-            else:
-                drop = level - 1
-                base_parts = cur_parts[:-drop] if drop <= len(cur_parts) else []
+            base_parts = cur_parts[:-level] if level <= len(cur_parts) else []
             module = ".".join([*base_parts, module]) if module else ".".join(base_parts)
         for alias in getattr(node, "names", []) or []:
             nm = getattr(alias, "name", "") or ""
@@ -573,9 +685,10 @@ class _SymVisitor(ast.NodeVisitor):
                 r = self._name_of_expr(arg)
                 if r:
                     self._add_edge(self._resolve_any(r), "property", arg)
-        # Top-level alias assignment: Alias = Target
+        # Top-level alias/variable assignment: Alias = Target (or type expression)
         if not self.class_stack and not self.func_stack:
-            # Only simple Name target(s) and RHS Name/Attribute
+            # (omit registering alias targets as symbols; focus report on classes/functions/methods)
+            # Only simple Name/Attribute RHS can form an alias edge; for complex (e.g. Union[...] ) we just keep the alias symbol
             try:
                 rhs_ref = self._name_of_expr(node.value) if hasattr(node, "value") else None
             except Exception:
@@ -584,9 +697,15 @@ class _SymVisitor(ast.NodeVisitor):
                 resolved = self._resolve_any(rhs_ref)
                 for t in getattr(node, "targets", []) or []:
                     if isinstance(t, ast.Name):
-                        # Register as module-level alias mapping
                         self.mod.alias[t.id] = resolved or rhs_ref
-                        # Also record an alias edge so path engine can honor alias* prefix
+                        # record module-level binding and optional variable symbol
+                        try:
+                            self.mod.module_bindings.add(t.id)
+                            if GLOBAL_COUNT_MODULE_BINDINGS:
+                                fqn = _sym_fqn(self.mod.fqn, t.id)
+                                self.defs.setdefault(fqn, Sym(fqn=fqn, kind="variable", file=str(self.mod.path), line=getattr(node, "lineno", 0) or 0))
+                        except Exception:
+                            pass
                         try:
                             src = _sym_fqn(self.mod.fqn, t.id)
                             dst = self._resolve_any(rhs_ref) or rhs_ref
@@ -595,6 +714,32 @@ class _SymVisitor(ast.NodeVisitor):
                             )
                         except Exception:
                             pass
+            else:
+                # If RHS is a type expression (e.g., Union[...]) that _name_of_expr can't reduce,
+                # still try to credit inner types so alias symbol participates in usage by annotation
+                try:
+                    val = getattr(node, "value", None)
+                    names = self._type_names_from_annotation(val) if val is not None else []
+                    if names:
+                        for t in getattr(node, "targets", []) or []:
+                            if isinstance(t, ast.Name):
+                                try:
+                                    self.mod.module_bindings.add(t.id)
+                                    if GLOBAL_COUNT_MODULE_BINDINGS:
+                                        fqn = _sym_fqn(self.mod.fqn, t.id)
+                                        self.defs.setdefault(fqn, Sym(fqn=fqn, kind="variable", file=str(self.mod.path), line=getattr(node, "lineno", 0) or 0))
+                                except Exception:
+                                    pass
+                                src = _sym_fqn(self.mod.fqn, t.id)
+                                for n in names:
+                                    if not n:
+                                        continue
+                                    dst = self._resolve_any(n) or n
+                                    self.edges.append(
+                                        Edge(src=src, dst=str(dst), type="alias", file=str(self.mod.path), line=getattr(node, "lineno", 0) or 0)
+                                    )
+                except Exception:
+                    pass
         # Also record call edges for RHS constructor calls and nested argument calls
         try:
             val = getattr(node, "value", None)
@@ -632,6 +777,39 @@ class _SymVisitor(ast.NodeVisitor):
                         for t in getattr(node, "targets", []) or []:
                             if isinstance(t, ast.Name):
                                 self.var_types_stack[-1][t.id] = str(target_type)
+                        try:
+                            if GLOBAL_VALUE_FLOW_ON_ASSIGN and target_type:
+                                self._add_edge(str(target_type), "value-flow", node)
+                        except Exception:
+                            pass
+                    # Tuple unpack: a, b, ... = callee(...)
+                    try:
+                        cfqn = str(callee_fqn)
+                        elems = getattr(self, "fn_return_tuple_elems", {}).get(cfqn) or GLOBAL_FN_RETURN_TUPLE_ELEMS.get(cfqn)
+                        if not elems:
+                            # fallback by basename match (handles re-exports via package __init__)
+                            base = cfqn.split(".")[-1]
+                            for k, v in GLOBAL_FN_RETURN_TUPLE_ELEMS.items():
+                                if k.split(".")[-1] == base:
+                                    elems = v
+                                    break
+                        tgts = getattr(node, "targets", []) or []
+                        if elems and tgts and isinstance(tgts[0], (ast.Tuple, ast.List)):
+                            names = [n for n in getattr(tgts[0], "elts", []) if isinstance(n, ast.Name)]
+                            for idx, n in enumerate(names):
+                                if idx >= len(elems):
+                                    break
+                                enames = elems[idx] or []
+                                # base type is the first in list; value type heuristic: last meaningful name
+                                base = next((x for x in enames if x), None)
+                                if base:
+                                    self.var_types_stack[-1][n.id] = str(self._resolve_any(base) or base)
+                                # For Mapping[K,V], value type heuristic: last token in enames
+                                val = enames[-1] if enames else None
+                                if val and self.var_map_value_types_stack:
+                                    self.var_map_value_types_stack[-1][n.id] = str(self._resolve_any(val) or val)
+                    except Exception:
+                        pass
                 else:
                     # Attribute callee: v = obj.method(...), if obj has inferred type, consult its method return types
                     if (
@@ -650,6 +828,23 @@ class _SymVisitor(ast.NodeVisitor):
                                 for t in getattr(node, "targets", []) or []:
                                     if isinstance(t, ast.Name):
                                         self.var_types_stack[-1][t.id] = str(target_type)
+        except Exception:
+            pass
+        # Mapping subscription: v = mapping[key] → if mapping has known value type, set v's type to that value type.
+        try:
+            if (
+                self.func_stack
+                and isinstance(getattr(node, "value", None), ast.Subscript)
+                and isinstance(getattr(node.value, "value", None), ast.Name)
+                and self.var_map_value_types_stack
+                and self.var_types_stack
+            ):
+                base_name = getattr(node.value.value, "id", "")
+                vtype = (self.var_map_value_types_stack[-1] or {}).get(base_name)
+                if vtype:
+                    for t in getattr(node, "targets", []) or []:
+                        if isinstance(t, ast.Name):
+                            self.var_types_stack[-1][t.id] = str(vtype)
         except Exception:
             pass
         # Class attribute type: self.<field> = Name -> learn from var_types
@@ -778,7 +973,28 @@ class _SymVisitor(ast.NodeVisitor):
                     self._add_edge(self._resolve_any(ref), "exception", typ)
         self.generic_visit(node)
 
+    def visit_Name(self, node: ast.Name) -> None:
+        # binding-use: referencing a module-level binding
+        try:
+            if GLOBAL_COUNT_MODULE_BINDINGS and isinstance(getattr(node, "ctx", None), ast.Load):
+                nm = getattr(node, "id", "")
+                if nm and nm in (self.mod.module_bindings or set()):
+                    self._add_edge(_sym_fqn(self.mod.fqn, nm), "binding-use", node)
+        except Exception:
+            pass
+
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        # Register module-level annotated bindings as module bindings (optional symbol emission)
+        try:
+            if not self.class_stack and not self.func_stack and isinstance(getattr(node, "target", None), ast.Name):
+                nm = getattr(node.target, "id", "")
+                if nm:
+                    self.mod.module_bindings.add(nm)
+                    if GLOBAL_COUNT_MODULE_BINDINGS:
+                        fqn = _sym_fqn(self.mod.fqn, nm)
+                        self.defs.setdefault(fqn, Sym(fqn=fqn, kind="variable", file=str(self.mod.path), line=getattr(node, "lineno", 0) or 0))
+        except Exception:
+            pass
         # Local variable annotation: x: Type = ...
         try:
             if self.func_stack and isinstance(getattr(node, "target", None), ast.Name):
@@ -801,17 +1017,52 @@ class _SymVisitor(ast.NodeVisitor):
                             if elem_name and self.var_elem_types_stack:
                                 elem_fqn = self._resolve_any(elem_name) or elem_name
                                 self.var_elem_types_stack[-1][name] = str(elem_fqn)
+                        # Mapping[K,V] or Dict[K,V] → record value type V for downstream .items()/subscription inference
+                        try:
+                            base_s = str(base or "")
+                            if (
+                                isinstance(sl, ast.Tuple)
+                                and sl.elts
+                                and len(sl.elts) >= 2
+                                and self.var_map_value_types_stack
+                                and (
+                                    base_s.endswith("Mapping")
+                                    or base_s.endswith("MutableMapping")
+                                    or base_s.endswith("Dict")
+                                    or base_s.endswith("dict")
+                                )
+                            ):
+                                val_expr = sl.elts[1]
+                                val_name = self._name_of_expr(val_expr)
+                                if val_name:
+                                    vfqn = self._resolve_any(val_name) or val_name
+                                    self.var_map_value_types_stack[-1][name] = str(vfqn)
+                        except Exception:
+                            pass
                     else:
                         tname = self._name_of_expr(ann)
                         if tname:
                             tfqn = self._resolve_any(tname) or tname
                             self.var_types_stack[-1][name] = str(tfqn)
                         # Optionally, count local var annotation as usage
-                        try:
-                            if GLOBAL_INCLUDE_ANNOTATIONS and tfqn:
-                                self._add_edge(str(tfqn), "annotation", node)
-                        except Exception:
-                            pass
+                        if GLOBAL_INCLUDE_ANNOTATIONS:
+                            try:
+                                if 'tfqn' in locals() and tfqn:
+                                    self._add_edge(str(tfqn), "annotation", node)
+                            except Exception:
+                                pass
+        except Exception:
+            pass
+        # Class-level attribute annotation: in class scope, count annotation types as usage when enabled
+        try:
+            if self.class_stack and not self.func_stack and isinstance(getattr(node, "target", None), ast.Name):
+                ann = getattr(node, "annotation", None)
+                if ann is not None and GLOBAL_INCLUDE_ANNOTATIONS:
+                    names = self._type_names_from_annotation(ann)
+                    for n in names:
+                        if not n:
+                            continue
+                        self._add_edge(self._resolve_any(n) or n, "annotation", node)
         except Exception:
             pass
         self.generic_visit(node)
@@ -842,6 +1093,22 @@ class _SymVisitor(ast.NodeVisitor):
                     et = (self.var_elem_types_stack[-1] or {}).get(getattr(iter_, "id", ""))
                     if et:
                         self.var_types_stack[-1][target.id] = et
+                # for name, node in var.items(): infer node type from Mapping value type
+                elif (
+                    isinstance(iter_, ast.Call)
+                    and isinstance(getattr(iter_, "func", None), ast.Attribute)
+                    and getattr(iter_.func, "attr", "") == "items"
+                    and isinstance(getattr(iter_.func, "value", None), ast.Name)
+                    and self.var_map_value_types_stack
+                ):
+                    base_name = getattr(iter_.func.value, "id", "")
+                    vtype = (self.var_map_value_types_stack[-1] or {}).get(base_name)
+                    # If target is a tuple (name, node)
+                    if vtype and isinstance(getattr(node, "target", None), ast.Tuple):
+                        elts = [e for e in getattr(node.target, "elts", []) if isinstance(e, ast.Name)]
+                        if len(elts) >= 2:
+                            # second var is value type
+                            self.var_types_stack[-1][elts[1].id] = str(vtype)
         except Exception:
             pass
         self.generic_visit(node)
@@ -880,6 +1147,46 @@ class _SymVisitor(ast.NodeVisitor):
                 ref = self._name_of_expr(expr.func)
                 if ref:
                     self._add_edge(self._resolve_any(ref), "call", expr)
+                    # Registry container bridging: NodeExecutorRegistry([...]) => bridge resolve/execute to candidates' supports/execute
+                    try:
+                        reg_ref = self._resolve_any(ref) or ref
+                        tail = str(reg_ref).split(".")[-1]
+                        if tail == "NodeExecutorRegistry":
+                            # parse positional or keyword 'executors'
+                            cands: List[str] = []
+                            # positional first arg as list/tuple
+                            try:
+                                if getattr(expr, "args", None):
+                                    first = expr.args[0]
+                                    items = []
+                                    if isinstance(first, (ast.List, ast.Tuple)):
+                                        items = list(getattr(first, "elts", []) or [])
+                                    for it in items:
+                                        if isinstance(it, ast.Call):
+                                            nm = self._name_of_expr(getattr(it, "func", None))
+                                            if nm:
+                                                cands.append(nm)
+                            except Exception:
+                                pass
+                            # keyword 'executors'
+                            try:
+                                for kw in getattr(expr, "keywords", []) or []:
+                                    if getattr(kw, "arg", None) == "executors":
+                                        val = getattr(kw, "value", None)
+                                        items = []
+                                        if isinstance(val, (ast.List, ast.Tuple)):
+                                            items = list(getattr(val, "elts", []) or [])
+                                        for it in items:
+                                            if isinstance(it, ast.Call):
+                                                nm = self._name_of_expr(getattr(it, "func", None))
+                                                if nm:
+                                                    cands.append(nm)
+                            except Exception:
+                                pass
+                            if cands:
+                                self.mod.registry_candidates.append((str(reg_ref), cands))
+                    except Exception:
+                        pass
                 else:
                     # Fallback for self.<field>.method(...) using learned field types
                     fn = getattr(expr, "func", None)
@@ -907,6 +1214,22 @@ class _SymVisitor(ast.NodeVisitor):
                         tfqn = (self.var_types_stack[-1] or {}).get(vname)
                         if tfqn and mname:
                             self._add_edge(f"{tfqn}.{mname}", "call", expr)
+                        elif mname:
+                            # Record pending unresolved attribute call by method name for later protocol/ABC bridging
+                            try:
+                                src_fqn = self._current_fqn()
+                                if src_fqn:
+                                    self.edges.append(
+                                        Edge(
+                                            src=src_fqn,
+                                            dst=f"__PENDING_METHOD__.{mname}",
+                                            type="pending-call-name",
+                                            file=str(self.mod.path),
+                                            line=getattr(expr, "lineno", 0) or 0,
+                                        )
+                                    )
+                            except Exception:
+                                pass
                     # Fallback for var.__class__.method(...) where var type is inferred
                     if (
                         isinstance(fn, ast.Attribute)
@@ -945,6 +1268,57 @@ class _SymVisitor(ast.NodeVisitor):
                 ref = self._name_of_expr(expr)
                 if ref:
                     self._add_edge(self._resolve_any(ref), "value-flow", expr)
+            elif isinstance(expr, ast.DictComp):
+                # Comprehension: propagate mapping.items() value type to target's second element
+                try:
+                    for gen in list(getattr(expr, "generators", []) or []):
+                        it = getattr(gen, "iter", None)
+                        tgt = getattr(gen, "target", None)
+                        if (
+                            isinstance(it, ast.Call)
+                            and isinstance(getattr(it, "func", None), ast.Attribute)
+                            and getattr(it.func, "attr", "") == "items"
+                            and isinstance(getattr(it.func, "value", None), ast.Name)
+                            and self.var_map_value_types_stack
+                        ):
+                            base_name = getattr(it.func.value, "id", "")
+                            vtype = (self.var_map_value_types_stack[-1] or {}).get(base_name)
+                            if vtype and isinstance(tgt, ast.Tuple):
+                                elts = [e for e in getattr(tgt, "elts", []) if isinstance(e, ast.Name)]
+                                if len(elts) >= 2 and self.var_types_stack:
+                                    self.var_types_stack[-1][elts[1].id] = str(vtype)
+                except Exception:
+                    pass
+                # Recurse into key/value and generator parts
+                try:
+                    kv = []
+                    if hasattr(expr, "key") and getattr(expr, "key", None) is not None:
+                        kv.append(getattr(expr, "key", None))
+                    if hasattr(expr, "value") and getattr(expr, "value", None) is not None:
+                        kv.append(getattr(expr, "value", None))
+                    for x in kv:
+                        self._record_callable_uses(x)
+                    for gen in list(getattr(expr, "generators", []) or []):
+                        it = getattr(gen, "iter", None)
+                        if it is not None:
+                            self._record_callable_uses(it)
+                        for cond in list(getattr(gen, "ifs", []) or []):
+                            self._record_callable_uses(cond)
+                except Exception:
+                    pass
+            elif isinstance(expr, (ast.ListComp, ast.SetComp, ast.GeneratorExp)):
+                try:
+                    elt = getattr(expr, "elt", None)
+                    if elt is not None:
+                        self._record_callable_uses(elt)
+                    for gen in list(getattr(expr, "generators", []) or []):
+                        it = getattr(gen, "iter", None)
+                        if it is not None:
+                            self._record_callable_uses(it)
+                        for cond in list(getattr(gen, "ifs", []) or []):
+                            self._record_callable_uses(cond)
+                except Exception:
+                    pass
             elif isinstance(expr, (ast.List, ast.Tuple, ast.Set)):
                 for elt in getattr(expr, "elts", []) or []:
                     self._record_callable_uses(elt)
@@ -1076,6 +1450,10 @@ def _parse_module(file_path: Path, module_fqn: str) -> ModuleInfo:
                 name = alias.name  # 'a' or 'a.b'
                 asname = alias.asname or name.split(".")[0]
                 mod.alias[asname] = name
+                try:
+                    mod.module_bindings.add(asname)
+                except Exception:
+                    pass
                 # add explicit alias edge for path engine
                 try:
                     src = f"{module_fqn}.{asname}"
@@ -1106,6 +1484,10 @@ def _parse_module(file_path: Path, module_fqn: str) -> ModuleInfo:
                 asname = alias.asname or alias.name
                 tgt = f"{module}.{alias.name}" if module else alias.name
                 mod.alias[asname] = tgt
+                try:
+                    mod.module_bindings.add(asname)
+                except Exception:
+                    pass
                 # add alias edge so path engine can see alias transitions
                 try:
                     src = f"{module_fqn}.{asname}"
@@ -1145,11 +1527,30 @@ def _parse_module(file_path: Path, module_fqn: str) -> ModuleInfo:
                 GLOBAL_FN_RETURN_TYPES[k] = cur
     except Exception:
         pass
+    # merge structured tuple element types
+    try:
+        local_rtpl = getattr(vis, "fn_return_tuple_elems", {}) or {}
+        if isinstance(local_rtpl, dict):
+            for k, v in local_rtpl.items():
+                if not isinstance(k, str) or not isinstance(v, list):
+                    continue
+                GLOBAL_FN_RETURN_TUPLE_ELEMS[k] = v
+    except Exception:
+        pass
     # merge pre-collected alias edges
     try:
         pre_alias: List[Edge] = _sys.modules[__name__].__dict__.pop("_tmp_edges_alias", [])  # type: ignore
         if pre_alias:
             edges.extend(pre_alias)
+    except Exception:
+        pass
+
+    # Emit variable symbols for module-level bindings discovered via imports/assigns if enabled
+    try:
+        if GLOBAL_COUNT_MODULE_BINDINGS:
+            for nm in sorted(mod.module_bindings or set()):
+                fqn = f"{module_fqn}.{nm}" if module_fqn else nm
+                defs.setdefault(fqn, Sym(fqn=fqn, kind="variable", file=str(file_path), line=0))
     except Exception:
         pass
 
@@ -1174,17 +1575,29 @@ def analyze_dead_code(
     whitelist_roots: Optional[List[str]] = None,
     protocol_nominal: bool = False,
     protocol_strict_signature: bool = True,
+    value_flow_on_assign: bool = True,
+    count_module_bindings: bool = False,
+    priority_paths: Optional[List[str]] = None,
+    ignore_protocol_methods: bool = False,
+    exclude_node_globs: Optional[List[str]] = None,
+    root_paths: Optional[List[str]] = None,
+    inherit_method_closure: bool = False,
 ) -> Tuple[Dict[str, Any], int]:
     # Reset global maps for a fresh analysis
     try:
         GLOBAL_FN_RETURN_TYPES.clear()
+        GLOBAL_FN_RETURN_TUPLE_ELEMS.clear()
     except Exception:
         pass
     # Set global include-annotations toggle for the current run
     global GLOBAL_INCLUDE_ANNOTATIONS
     GLOBAL_INCLUDE_ANNOTATIONS = bool(include_annotations)
+    global GLOBAL_VALUE_FLOW_ON_ASSIGN
+    GLOBAL_VALUE_FLOW_ON_ASSIGN = bool(value_flow_on_assign)
+    global GLOBAL_COUNT_MODULE_BINDINGS
+    GLOBAL_COUNT_MODULE_BINDINGS = bool(count_module_bindings)
     roots_base = [Path(p) for p in paths]
-    files = _collect_py_files(paths, include, exclude)
+    files = _collect_py_files(paths, include, exclude, priority_paths=priority_paths or root_paths)
     tops = _find_top_packages(paths)
 
     # Scan modules
@@ -1200,6 +1613,8 @@ def analyze_dead_code(
         syms.update(defs)
         edges.extend(e)
 
+    # (alias nodes emission omitted in report by default)
+
     # Build global alias map across modules, including re-exports and top-level assignment aliases
     alias_global: Dict[str, str] = {}
     for mod_name, mi in modules.items():
@@ -1211,6 +1626,28 @@ def analyze_dead_code(
             if tgt and "." not in tgt:
                 tgt = f"{mod_name}.{tgt}"
             alias_global[left] = tgt
+
+    # Add method-level alias edges for class re-exports (aggregator -> implementation)
+    try:
+        # Build index of methods per class
+        methods_by_class: Dict[str, Set[str]] = {}
+        for s in syms.values():
+            if s.kind == "method":
+                cls = ".".join(s.fqn.split(".")[:-1])
+                m = s.fqn.split(".")[-1]
+                methods_by_class.setdefault(cls, set()).add(m)
+        for agg, impl in list(alias_global.items()):
+            # only consider class alias pairs
+            if agg in syms and syms[agg].kind != "class":
+                continue
+            if impl not in methods_by_class:
+                continue
+            for m in methods_by_class.get(impl, set()):
+                src = f"{agg}.{m}"
+                dst = f"{impl}.{m}"
+                edges.append(Edge(src=src, dst=dst, type="alias", file="", line=0))
+    except Exception:
+        pass
 
     def _resolve_alias_chain(name: str, limit: int = 10) -> str:
         cur = name
@@ -1249,6 +1686,99 @@ def analyze_dead_code(
                 rb = _resolve_with_tail(b)
                 resolved_list.append(rb)
             mi.bases[cls_local] = resolved_list
+
+    # Registry container bridging (post-alias): bridge NodeExecutorRegistry methods to candidate executors' methods
+    try:
+        for mod_name, mi in modules.items():
+            for reg_ref, cand_refs in (mi.registry_candidates or []):
+                reg_cls = _resolve_with_tail(reg_ref)
+                # build method sources if present
+                src_resolve = f"{reg_cls}.resolve"
+                src_execute = f"{reg_cls}.execute"
+                for c in (cand_refs or []):
+                    c_cls = _resolve_with_tail(c)
+                    dst_supports = f"{c_cls}.supports"
+                    dst_execute = f"{c_cls}.execute"
+                    # add edges only if destination symbols are known; sources may be unknown but will be matched by exact FQNs during traversal
+                    if dst_supports in syms:
+                        edges.append(Edge(src=src_resolve, dst=dst_supports, type="call", file=str(mi.path), line=0))
+                    if dst_execute in syms:
+                        edges.append(Edge(src=src_execute, dst=dst_execute, type="call", file=str(mi.path), line=0))
+    except Exception:
+        pass
+
+    # Canonicalize edge destinations by class-name tail when alias-chain cannot resolve to a known symbol
+    try:
+        # Build index of known classes and their methods
+        classes_by_tail: Dict[str, Set[str]] = {}
+        methods_in_class: Dict[str, Set[str]] = {}
+        for s in syms.values():
+            if s.kind == "class":
+                classes_by_tail.setdefault(s.fqn.split(".")[-1], set()).add(s.fqn)
+        for s in syms.values():
+            if s.kind == "method":
+                cls = ".".join(s.fqn.split(".")[:-1])
+                m = s.fqn.split(".")[-1]
+                methods_in_class.setdefault(cls, set()).add(m)
+        for e in edges:
+            if not isinstance(e.dst, str) or e.dst in syms:
+                continue
+            parts = e.dst.split(".")
+            if len(parts) < 2:
+                continue
+            cls_part = ".".join(parts[:-1])
+            mname = parts[-1]
+            # If head cannot be resolved, try tail-match to a known class that actually defines mname
+            resolved_head = _resolve_alias_chain(cls_part)
+            if resolved_head == cls_part:
+                tail = cls_part.split(".")[-1]
+                cands = classes_by_tail.get(tail, set()) or set()
+                for cand in cands:
+                    if mname in methods_in_class.get(cand, set()):
+                        new_dst = f"{cand}.{mname}"
+                        if new_dst in syms:
+                            e.dst = new_dst
+                            break
+    except Exception:
+        pass
+
+    # Expand pending unresolved var.method calls to protocol/ABC candidates by method name (bounded fan-out)
+    try:
+        # Protocol set (inherit → typing.Protocol)
+        prot_set: Set[str] = set(
+            e.src for e in edges if e.type == "inherit" and isinstance(e.dst, str) and (
+                e.dst == "typing.Protocol" or str(e.dst).endswith(".Protocol")
+            )
+        )
+        # ABC set (inherit → abc.ABC)
+        abc_set: Set[str] = set(
+            e.src for e in edges if e.type == "inherit" and isinstance(e.dst, str) and (
+                e.dst.endswith("abc.ABC") or e.dst.endswith(".ABC")
+            )
+        )
+        # method-name -> candidate owner classes (prefer protocols/ABCs but include all; filter by fan-out later)
+        method_to_candidates: Dict[str, Set[str]] = {}
+        for s in syms.values():
+            if s.kind == "method":
+                cls = ".".join(s.fqn.split(".")[:-1])
+                m = s.fqn.split(".")[-1]
+                # collect for all classes; later we cap fan-out
+                method_to_candidates.setdefault(m, set()).add(cls)
+        MAX_CAND = 4
+        for e in list(edges):
+            if e.type == "pending-call-name" and isinstance(e.dst, str) and e.dst.startswith("__PENDING_METHOD__."):
+                m = e.dst.split(".", 1)[1]
+                cands = list(method_to_candidates.get(m, set()) or set())
+                # Prefer candidates that are Protocols/ABCs if present
+                pref = [c for c in cands if (c in prot_set or c in abc_set)]
+                if pref:
+                    cands = pref
+                if 0 < len(cands) <= MAX_CAND:
+                    for c in cands:
+                        dst = f"{c}.{m}"
+                        edges.append(Edge(src=e.src, dst=dst, type="call", file="", line=0))
+    except Exception:
+        pass
 
     # Roots from top-level package __init__.py exports
     root_syms: Set[str] = set()
@@ -1300,17 +1830,32 @@ def analyze_dead_code(
         "call",
         "value-flow",
         "decorator",
+        "decorator-return",
         "exception",
         "isinstance",
         "property",
         "return-escape",
         "descriptor",
         "constructor",
+        "member-of",
     }
+    if GLOBAL_COUNT_MODULE_BINDINGS:
+        DIRECT_FOR_USED.add("binding-use")
     used_classes: Set[str] = set()
     for e in edges:
-        if e.type in DIRECT_FOR_USED and e.dst in syms and syms[e.dst].kind == "class":
-            used_classes.add(e.dst)
+        if e.type in DIRECT_FOR_USED or (GLOBAL_INCLUDE_ANNOTATIONS and e.type == "annotation"):
+            # direct hit: edge targets a class symbol
+            if e.dst in syms and syms[e.dst].kind == "class":
+                used_classes.add(e.dst)
+                continue
+            # best-effort: edge targets a method fqn 'Cls.m' of a derived class (even if method symbol is not declared here)
+            try:
+                if isinstance(e.dst, str) and "." in e.dst:
+                    cls_part = e.dst.rsplit(".", 1)[0]
+                    if cls_part in syms and syms[cls_part].kind == "class":
+                        used_classes.add(cls_part)
+            except Exception:
+                pass
 
     # Nominal protocol propagation: Port.m -> Impl.m (only if impl class is used)
     if protocol_nominal:
@@ -1320,11 +1865,30 @@ def analyze_dead_code(
                 e.dst == "typing.Protocol" or str(e.dst).endswith(".Protocol")
             )
         )
-        # Map impl -> set(ports) using inherit edges
+        # Map impl -> set(ports) using inherit edges (transitively via base classes)
         impl_to_ports: Dict[str, Set[str]] = {}
+        direct_impl: Dict[str, Set[str]] = {}
+        class_bases: Dict[str, Set[str]] = {}
         for e in edges:
-            if e.type == "inherit" and isinstance(e.dst, str) and e.dst in prot_set:
-                impl_to_ports.setdefault(e.src, set()).add(e.dst)
+            if e.type == "inherit" and isinstance(e.dst, str):
+                class_bases.setdefault(e.src, set()).add(e.dst)
+                if e.dst in prot_set:
+                    direct_impl.setdefault(e.src, set()).add(e.dst)
+        # Compute transitive protocols for each class
+        memo: Dict[str, Set[str]] = {}
+        def _protocols_of(cls: str) -> Set[str]:
+            if cls in memo:
+                return memo[cls]
+            acc: Set[str] = set(direct_impl.get(cls, set()))
+            for b in class_bases.get(cls, set()) or []:
+                acc |= _protocols_of(b)
+            memo[cls] = acc
+            return acc
+        # Populate impl_to_ports for all classes
+        for cls in class_bases.keys():
+            ports = _protocols_of(cls)
+            if ports:
+                impl_to_ports[cls] = ports
         # build method name map for ports
         port_methods: Dict[str, Set[str]] = {}
         for sym in syms.values():
@@ -1421,6 +1985,122 @@ def analyze_dead_code(
             edges.append(Edge(src=base_m_fqn, dst=drv_m, type="inherit-override", file="", line=0))
             adj_typed.setdefault(base_m_fqn, []).append(("inherit-override", drv_m))
 
+    # Decorator closure credit: if a decorator is used on a function, treat the decorator's returned
+    # wrapper (or any inner-def as a fallback) as used by the decorated function.
+    try:
+        dec_returns: Dict[str, Set[str]] = {}
+        for e in edges:
+            if e.type == "return-escape" and isinstance(e.src, str) and isinstance(e.dst, str):
+                dec_returns.setdefault(e.src, set()).add(e.dst)
+        # fallback: inner-def containment if explicit return-escape not recorded
+        inner_adj: Dict[str, Set[str]] = {}
+        for e in edges:
+            if e.type == "inner-def" and isinstance(e.src, str) and isinstance(e.dst, str):
+                inner_adj.setdefault(e.src, set()).add(e.dst)
+        def _inner_closure(fn: str) -> Set[str]:
+            seen: Set[str] = set()
+            stack = [fn]
+            while stack:
+                cur = stack.pop()
+                for nxt in inner_adj.get(cur, set()) or []:
+                    if nxt not in seen:
+                        seen.add(nxt)
+                        stack.append(nxt)
+            return seen
+        for e in list(edges):
+            if e.type == "decorator" and isinstance(e.src, str) and isinstance(e.dst, str):
+                decorated, dec = e.src, e.dst
+                for inner in dec_returns.get(dec, set()) or []:
+                    edges.append(Edge(src=decorated, dst=inner, type="decorator-return", file="", line=0))
+                    adj_typed.setdefault(decorated, []).append(("decorator-return", inner))
+                # fallback: inner-defs (transitive closure)
+                if dec not in dec_returns:
+                    for inner in _inner_closure(dec):
+                        edges.append(Edge(src=decorated, dst=inner, type="decorator-return", file="", line=0))
+                        adj_typed.setdefault(decorated, []).append(("decorator-return", inner))
+    except Exception:
+        pass
+
+    # Bridge calls to impl methods to protocol methods (handles alias-resolved class names and re-exported module paths)
+    try:
+        # Build protocol set and method names
+        prot_set: Set[str] = set(
+            e.src for e in edges if e.type == "inherit" and isinstance(e.dst, str) and (
+                e.dst == "typing.Protocol" or str(e.dst).endswith(".Protocol")
+            )
+        )
+        port_methods: Dict[str, Set[str]] = {}
+        for sym in syms.values():
+            if sym.kind == "method":
+                cls = ".".join(sym.fqn.split(".")[:-1])
+                mname = sym.fqn.split(".")[-1]
+                if cls in prot_set:
+                    port_methods.setdefault(cls, set()).add(mname)
+        # impl -> protocols (transitive via bases) using per-module bases (already alias-resolved)
+        class_bases: Dict[str, Set[str]] = {}
+        for mod_name, mi in modules.items():
+            for cls_local, bases in (mi.bases or {}).items():
+                cls_fqn = f"{mod_name}.{cls_local}" if mod_name else cls_local
+                for b in bases or []:
+                    class_bases.setdefault(cls_fqn, set()).add(b)
+        # Index protocols by class-name tail to tolerate module-level re-exports / relative import path differences
+        prot_by_tail: Dict[str, Set[str]] = {}
+        for p in prot_set:
+            tail = p.split(".")[-1]
+            prot_by_tail.setdefault(tail, set()).add(p)
+        # Index known classes by tail to help canonicalize bases that used relative module paths
+        classes_by_tail: Dict[str, Set[str]] = {}
+        for sym in syms.values():
+            if sym.kind == "class":
+                tail = sym.fqn.split(".")[-1]
+                classes_by_tail.setdefault(tail, set()).add(sym.fqn)
+
+        memo: Dict[str, Set[str]] = {}
+        def _ports(cls: str) -> Set[str]:
+            if cls in memo:
+                return memo[cls]
+            acc: Set[str] = set()
+            bases = class_bases.get(cls, set()) or set()
+            # If this class key isn't canonicalized, try to match by tail name as a fallback
+            if not bases and "." in cls:
+                t = cls.split(".")[-1]
+                for cand in classes_by_tail.get(t, set()) or set():
+                    if cand == cls:
+                        continue
+                    bases |= class_bases.get(cand, set()) or set()
+            for b in bases:
+                # Direct match
+                if b in prot_set:
+                    acc.add(b)
+                # Tail-name match to tolerate alias/re-exported paths
+                tail = str(b).split(".")[-1]
+                for p in prot_by_tail.get(tail, set()) or set():
+                    acc.add(p)
+                # Recurse into the base (canonicalize by tail if needed)
+                if b in class_bases:
+                    acc |= _ports(b)
+                else:
+                    t2 = str(b).split(".")[-1]
+                    for cand in classes_by_tail.get(t2, set()) or set():
+                        acc |= _ports(cand)
+            memo[cls] = acc
+            return acc
+        # Scan calls to C.m (string form allowed); resolve C through alias chain
+        for e in list(edges):
+            if e.type == "call" and isinstance(e.dst, str) and "." in e.dst:
+                parts = e.dst.split(".")
+                cls = ".".join(parts[:-1])
+                m = parts[-1]
+                base_resolved = _resolve_with_tail(cls)
+                for p in _ports(base_resolved):
+                    # If the method name exists on the protocol, bridge to it; if we lack method map, still bridge optimistically by name
+                    if (m in port_methods.get(p, set())) or True:
+                        dst = f"{p}.{m}"
+                        edges.append(Edge(src=e.src, dst=dst, type="protocol-decl", file="", line=0))
+                        adj_typed.setdefault(e.src, []).append(("protocol-decl", dst))
+    except Exception:
+        pass
+
     # Traverse with simple path-policy NFA (two states):
     #   S0: only 'alias' edges allowed (alias*)
     #   S1: after first direct-usage edge, allow {usage, nominal}*
@@ -1428,12 +2108,14 @@ def analyze_dead_code(
         "call",
         "value-flow",
         "decorator",
+        "decorator-return",
         "exception",
         "isinstance",
         "property",
         "return-escape",
         "descriptor",
         "constructor",
+        "member-of",
     }
     if GLOBAL_INCLUDE_ANNOTATIONS:
         DIRECT_USAGE = set(DIRECT_USAGE)
@@ -1480,6 +2162,37 @@ def analyze_dead_code(
             if fqn.startswith(prefix):
                 policy.add(fqn)
 
+    # Additional policy: methods on API-returned classes
+    # If a root function's return annotation is a known class, keep that class's methods
+    try:
+        for r in list(root_syms):
+            sym = syms.get(r)
+            if not sym or sym.kind != "function":
+                continue
+            # pull from GLOBAL_FN_RETURN_TYPES if present
+            rts = GLOBAL_FN_RETURN_TYPES.get(r, [])
+            for t in rts:
+                if t in syms and syms[t].kind == "class":
+                    prefix = t + "."
+                    for fqn in syms:
+                        if fqn.startswith(prefix):
+                            policy.add(fqn)
+    except Exception:
+        pass
+
+    # Canonicalize policy set through alias chain
+    try:
+        canon_policy: Set[str] = set()
+        for p in list(policy):
+            if p in syms:
+                canon_policy.add(p)
+                continue
+            rp = _resolve_with_tail(p)
+            canon_policy.add(rp if rp in syms else p)
+        policy = canon_policy
+    except Exception:
+        pass
+
     # Additionally, enable annotation edges to count when they originate from kept class bodies:
     # If policy keeps an exported/whitelisted class body, annotations inside those methods should credit their types.
     # Seed reachability from policy nodes as well to traverse any annotation/value-flow edges they emit.
@@ -1489,8 +2202,147 @@ def analyze_dead_code(
     except Exception:
         pass
 
+    # If annotations are included, treat Protocol/TypedDict class definitions referenced by annotations as used (class def only)
+    try:
+        if GLOBAL_INCLUDE_ANNOTATIONS:
+            ann_targets: Set[str] = set()
+            for e in edges:
+                if e.type == "annotation" and isinstance(e.dst, str):
+                    ann_targets.add(e.dst)
+            prot_set: Set[str] = set(
+                e.src for e in edges if e.type == "inherit" and isinstance(e.dst, str) and (
+                    e.dst == "typing.Protocol" or str(e.dst).endswith(".Protocol")
+                )
+            )
+            td_set: Set[str] = set(
+                e.src for e in edges if e.type == "inherit" and isinstance(e.dst, str) and (
+                    e.dst == "typing.TypedDict" or str(e.dst).endswith(".TypedDict")
+                )
+            )
+            keep = (prot_set | td_set) & ann_targets
+            if keep:
+                policy |= keep
+                reachable |= _reachable_via_pattern(keep)
+    except Exception:
+        pass
+
+    # Canonicalize reachable nodes through alias chain to avoid aggregator/module duplication
+    try:
+        canon_reach: Set[str] = set()
+        for n in list(reachable):
+            if n in syms:
+                canon_reach.add(n)
+                continue
+            try:
+                rn = _resolve_with_tail(n)
+                if rn in syms:
+                    canon_reach.add(rn)
+                else:
+                    canon_reach.add(n)
+            except Exception:
+                canon_reach.add(n)
+        reachable = canon_reach
+    except Exception:
+        pass
+
+    # (alias-only symbols excluded from gate counting; keep report focused on classes/functions/methods)
+    alias_only: Dict[str, Tuple[str, int]] = {}
+
+    # Dead = all symbols (incl. alias-only) minus alive, after exclusions
     alive = reachable | policy | root_syms
-    dead = [s for s in syms if s not in alive]
+    all_fqns = set(syms.keys())
+    # Exclude protocol methods if configured
+    if ignore_protocol_methods:
+        try:
+            prot_set: Set[str] = set(
+                e.src for e in edges if e.type == "inherit" and isinstance(e.dst, str) and (
+                    e.dst == "typing.Protocol" or str(e.dst).endswith(".Protocol")
+                )
+            )
+            to_exclude: Set[str] = set()
+            for fqn, s in syms.items():
+                if s.kind != "method":
+                    continue
+                cls = ".".join(fqn.split(".")[:-1])
+                if cls in prot_set:
+                    to_exclude.add(fqn)
+            all_fqns -= to_exclude
+        except Exception:
+            pass
+    # Exclude nodes by glob matches on FQN or file path
+    if exclude_node_globs:
+        try:
+            pats = list(exclude_node_globs or [])
+            drop: Set[str] = set()
+            for fqn, s in syms.items():
+                name_ok = any(fnmatch.fnmatch(fqn, p) for p in pats)
+                file_ok = any(fnmatch.fnmatch(s.file, p) for p in pats)
+                if name_ok or file_ok:
+                    drop.add(fqn)
+            all_fqns -= drop
+        except Exception:
+            pass
+    dead = sorted([s for s in all_fqns if s not in alive])
+
+    # Inheritance/protocol method-name closure (independent stage):
+    # For any method name m, along inheritance/protocol chains, if any class's m is used, mark all same-name methods in the connected chain as used.
+    if inherit_method_closure:
+        try:
+            # Build class adjacency (undirected) from inherit edges
+            class_adj: Dict[str, Set[str]] = {}
+            for e in edges:
+                if e.type == "inherit" and isinstance(e.dst, str):
+                    src = e.src
+                    dst = e.dst
+                    if src in syms and syms[src].kind == "class" and dst in syms and syms[dst].kind == "class":
+                        class_adj.setdefault(src, set()).add(dst)
+                        class_adj.setdefault(dst, set()).add(src)
+            # Method map: method name -> set of classes defining it
+            methods_by_name: Dict[str, Set[str]] = {}
+            for s in syms.values():
+                if s.kind == "method":
+                    parts = s.fqn.split(".")
+                    if len(parts) >= 2:
+                        cls = ".".join(parts[:-1])
+                        m = parts[-1]
+                        methods_by_name.setdefault(m, set()).add(cls)
+            # Seed used methods set
+            used_methods: Set[str] = set()
+            for fqn in (alive):
+                if fqn in syms and syms[fqn].kind == "method":
+                    used_methods.add(fqn)
+            # Closure per method name
+            newly_used: Set[str] = set()
+            from collections import deque
+            for m, classes in methods_by_name.items():
+                classes_with_m = set(classes)
+                seen: Set[str] = set()
+                for cls in list(classes_with_m):
+                    if cls in seen:
+                        continue
+                    # BFS over inheritance graph but only stepping through classes that also define m (contiguous same-name)
+                    comp: Set[str] = set()
+                    q = deque([cls])
+                    seen.add(cls)
+                    while q:
+                        cur = q.popleft()
+                        if cur not in classes_with_m:
+                            continue
+                        comp.add(cur)
+                        for nxt in class_adj.get(cur, set()) or []:
+                            if nxt in classes_with_m and nxt not in seen:
+                                seen.add(nxt)
+                                q.append(nxt)
+                    # If any method in this component is used, mark all same-name methods as used
+                    comp_methods = {f"{c}.{m}" for c in comp}
+                    if used_methods & comp_methods:
+                        newly_used |= comp_methods
+            # Apply closure
+            alive |= newly_used
+            all_fqns = set(syms.keys())
+            dead = sorted([s for s in all_fqns if s not in alive])
+        except Exception:
+            pass
 
     report: Dict[str, Any] = {
         "version": "1.0",
@@ -1504,7 +2356,7 @@ def analyze_dead_code(
         "roots": sorted(list(root_syms)),
         "reachable": sorted(list(reachable)),
         "policy": sorted(list(policy)),
-        "dead": sorted(dead),
+        "dead": dead,
         "nodes": [
             {"fqn": s.fqn, "kind": s.kind, "file": s.file, "line": s.line}
             for s in syms.values()
@@ -1524,6 +2376,13 @@ def save_dead_code_report(
     whitelist_roots: Optional[List[str]] = None,
     protocol_nominal: bool = False,
     protocol_strict_signature: bool = True,
+    value_flow_on_assign: bool = True,
+    count_module_bindings: bool = False,
+    priority_paths: Optional[List[str]] = None,
+    ignore_protocol_methods: bool = False,
+    exclude_node_globs: Optional[List[str]] = None,
+    root_paths: Optional[List[str]] = None,
+    inherit_method_closure: bool = False,
 ) -> Tuple[int, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     report, dead_count = analyze_dead_code(
@@ -1535,6 +2394,13 @@ def save_dead_code_report(
         whitelist_roots=whitelist_roots,
         protocol_nominal=protocol_nominal,
         protocol_strict_signature=protocol_strict_signature,
+        value_flow_on_assign=value_flow_on_assign,
+        count_module_bindings=count_module_bindings,
+        priority_paths=priority_paths,
+        ignore_protocol_methods=ignore_protocol_methods,
+        exclude_node_globs=exclude_node_globs,
+        root_paths=root_paths,
+        inherit_method_closure=inherit_method_closure,
     )
     out = output_dir / "dead_code.json"
     out.write_text(
@@ -1550,6 +2416,7 @@ def explain_usage_path(
     target_fqn: str,
     allow_module_export_closure: bool = False,
     whitelist_roots: Optional[List[str]] = None,
+    priority_paths: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Return one root→target explain path under the default path policy.
 
@@ -1563,6 +2430,7 @@ def explain_usage_path(
         whitelist_roots=whitelist_roots,
         protocol_nominal=True,
         protocol_strict_signature=True,
+        priority_paths=priority_paths,
     )
     # Build typed adjacency from report edges
     edges = report.get("edges", [])
@@ -1581,13 +2449,18 @@ def explain_usage_path(
         "call",
         "value-flow",
         "decorator",
+        "decorator-return",
         "exception",
         "isinstance",
         "property",
         "return-escape",
         "descriptor",
+        "constructor",
+        "member-of",
     }
-    NOMINAL = {"inherit-override", "protocol-impl"}
+    # Include binding-use in explain traversal for consistency
+    DIRECT_USAGE.add("binding-use")
+    NOMINAL = {"inherit-override", "protocol-impl", "protocol-decl"}
 
     target = target_fqn
     if target not in nodes:
@@ -1644,3 +2517,57 @@ def explain_usage_path(
                             prev[ns] = ((node, state), ed)
                             q.append(ns)
     return {"found": False, "root": None, "target": target_fqn, "path_edges": []}
+    # Seed additional roots from root_paths usages: for any edge whose source file is under root_paths,
+    # add its destination symbol as a root (only symbols known in this project)
+    try:
+        rp_set: Set[Path] = set()
+        for p in (root_paths or []):
+            try:
+                rp_set.add(Path(p).resolve())
+            except Exception:
+                continue
+        if rp_set:
+            def _is_under_root(p: str) -> bool:
+                try:
+                    fp = Path(p).resolve()
+                except Exception:
+                    return False
+                for r in rp_set:
+                    try:
+                        # if r is a file, require exact match; if dir, prefix match
+                        if r.is_file():
+                            if fp == r:
+                                return True
+                        else:
+                            if str(fp).startswith(str(r)):
+                                return True
+                    except Exception:
+                        pass
+                return False
+            # Build alias resolver helpers available below
+            def _alias_resolve(name: str) -> str:
+                return _resolve_with_tail(name)
+            for e in edges:
+                if _is_under_root(getattr(e, 'file', '')):
+                    dst = e.dst if isinstance(e.dst, str) else None
+                    if not dst:
+                        continue
+                    # resolve through alias chain
+                    rd = _alias_resolve(dst)
+                    if rd in syms:
+                        root_syms.add(rd)
+    except Exception:
+        pass
+
+    # Canonicalize roots through alias chain to implementation symbols
+    try:
+        canon_roots: Set[str] = set()
+        for r in list(root_syms):
+            if r in syms:
+                canon_roots.add(r)
+                continue
+            rr = _resolve_with_tail(r)
+            canon_roots.add(rr if rr in syms else r)
+        root_syms = canon_roots
+    except Exception:
+        pass
